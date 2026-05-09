@@ -1,31 +1,34 @@
 """
 src/training/trainer.py
-Whisper + LoRA 학습 파이프라인.
+Whisper + LoRA 학습 파이프라인 (안정성 + 편의성 통합 버전)
 
-핵심 설계:
-  - metadata.csv의 file_name(상대경로)으로 오디오를 로드한다.
-  - resume_from_checkpoint=True: 재실행 시 마지막 체크포인트부터 이어서 학습한다.
-  - save_steps 주기로 가중치를 저장하여 크래시 손실을 최소화한다.
-  - 모든 예외는 @exception_guard를 통해 syuka_error_log.md에 기록된다.
+핵심 기능:
+  - IterableDataset (Streaming): 윈도우 메모리 맵핑 에러(WinError 87)를 원천 차단.
+  - 자동 체크포인트 재개: 중단된 학습을 마지막 저장 지점부터 이어서 진행.
+  - 실시간 대시보드: Rich 라이브러리를 활용한 시각적인 학습 현황 모니터링.
+  - 안전한 데이터 로딩: 피클링 에러 방지를 위해 전처리 로직을 격리 처리.
 """
 import os
 import torch
 import pandas as pd
 import librosa
+import traceback
 from dataclasses import dataclass
 from typing import Any, Dict, List, Union
 
-from datasets import Dataset, Audio
+from datasets import IterableDataset
 from transformers import (
     WhisperFeatureExtractor,
     WhisperTokenizer,
+    WhisperForConditionalGeneration,
+    WhisperProcessor,
     Seq2SeqTrainingArguments,
     Seq2SeqTrainer,
 )
 
 from src.core.config import CFG, DATASET_DIR, METADATA_PATH, LORA_DIR
 from src.core.exceptions import TrainingError, exception_guard
-from src.models.whisper_lora import load_base_model, apply_lora
+from src.models.whisper_lora import apply_lora
 from src.training.callbacks import DashboardCallback
 from src.utils import logger
 
@@ -37,181 +40,223 @@ from src.utils import logger
 @dataclass
 class DataCollatorSpeechSeq2SeqWithPadding:
     """
-    배치 내 샘플들의 길이를 맞추고,
-    레이블에서 패딩 토큰을 -100으로 마스킹한다.
+    배치 내 샘플들의 길이를 맞추고 레이블에서 패딩 토큰을 -100으로 마스킹한다.
     (-100은 CrossEntropyLoss에서 자동으로 무시됨)
     """
-    # Whisper 모델용 프로세서 (특징 추출기 및 토크나이저 포함)
     processor: Any
 
     def __call__(self, features: List[Dict[str, Union[List[int], torch.Tensor]]]) -> Dict[str, torch.Tensor]:
-        # 배치 내 각 샘플로부터 입력 오디오 특징 추출
+        # 입력 오디오 특징 추출 및 패딩
         input_features = [{"input_features": f["input_features"]} for f in features]
-        # 입력 특징들을 패딩하여 동일한 길이의 텐서로 변환
         batch = self.processor.feature_extractor.pad(input_features, return_tensors="pt")
 
-        # 배치 내 각 샘플로부터 텍스트 레이블 추출
+        # 텍스트 레이블 추출 및 패딩
         label_features = [{"input_ids": f["labels"]} for f in features]
-        # 레이블들을 패딩하여 동일한 길이의 텐서로 변환
         labels_batch   = self.processor.tokenizer.pad(label_features, return_tensors="pt")
         
-        # 패딩된 영역(-1)을 -100으로 치환하여 손실 계산 시 제외되도록 설정
-        labels         = labels_batch["input_ids"].masked_fill(
+        # 패딩된 영역을 -100으로 치환하여 손실 계산 시 제외되도록 설정
+        labels = labels_batch["input_ids"].masked_fill(
             labels_batch.attention_mask.ne(1), -100
         )
 
-        # 문장 시작(BOS) 토큰이 모든 레이블의 처음에 있으면 중복 방지를 위해 제거
+        # 문장 시작(BOS) 토큰 중복 방지
         if (labels[:, 0] == self.processor.tokenizer.bos_token_id).all().cpu().item():
             labels = labels[:, 1:]
 
-        # 최종 가공된 레이블을 배치 딕셔너리에 저장
         batch["labels"] = labels
         return batch
 
 
 # ---------------------------------------------------------------------------- #
-#  전처리 함수 (map 적용용)                                                       #
+#  안전한 전처리 엔진 (격리 모드)                                                 #
 # ---------------------------------------------------------------------------- #
 
-def _make_prepare_fn(feature_extractor, tokenizer):
+def _pure_prepare_fn(sample, feature_extractor, tokenizer):
     """
-    오디오 파일을 직접 로드하여 전처리한다. (torchcodec 에러 방지용)
+    외부 객체(logger, rich 등)를 절대 참조하지 않는 순수 전처리 함수.
+    이 함수는 피클링 에러를 방지하기 위해 제너레이터 내부에서만 작동합니다.
     """
-    def prepare_dataset(batch):
-        # [수정] 라이브러리에 맡기지 않고 직접 librosa로 오디오 로드
-        path = batch["audio"]
+    try:
+        path = sample["audio"]
+        # 오디오 로드 및 float32 강제 (WinError 87 방지)
         audio_array, _ = librosa.load(path, sr=16000)
+        audio_array = audio_array.astype("float32")
         
-        # 오디오 신호를 Mel-Spectrogram 입력 특징으로 변환
-        batch["input_features"] = feature_extractor(
+        # 30초 초과 데이터는 Whisper 기본 사양에 맞춰 절단
+        if len(audio_array) > 16000 * 30:
+            audio_array = audio_array[:16000*30]
+
+        # Mel-Spectrogram 추출
+        input_features = feature_extractor(
             audio_array, sampling_rate=16000
         ).input_features[0]
         
-        # 전사 텍스트를 토큰 ID 리스트로 변환
-        batch["labels"] = tokenizer(batch["transcription"]).input_ids
-        return batch
-    return prepare_dataset
+        # 전사 텍스트 토큰화
+        text = str(sample["transcription"]) if sample["transcription"] else " "
+        labels = tokenizer(text).input_ids
+        
+        return {
+            "input_features": input_features,
+            "labels": labels
+        }
+    except:
+        return None
+
+def dataset_generator(audio_list, transcription_list, model_id, language, task):
+    """
+    멀티프로세싱 호환을 위해 최소한의 기본 타입 인자만 받는 데이터 제너레이터.
+    내부에서 필요한 도구(fe, tk)를 로컬로 생성하여 외부 상태 오염을 방지합니다.
+    """
+    from transformers import WhisperFeatureExtractor, WhisperTokenizer
+    
+    # 제너레이터 내부에서 전처리 도구 초기화 (피클링 에러 해결의 핵심)
+    fe = WhisperFeatureExtractor.from_pretrained(model_id)
+    tk = WhisperTokenizer.from_pretrained(model_id, language=language, task=task)
+    
+    for audio, transcription in zip(audio_list, transcription_list):
+        sample = {"audio": audio, "transcription": transcription}
+        processed = _pure_prepare_fn(sample, fe, tk)
+        if processed:
+            yield processed
 
 
 # ---------------------------------------------------------------------------- #
-#  메인 학습 함수                                                                 #
+#  메인 학습 파이프라인                                                            #
 # ---------------------------------------------------------------------------- #
 
-@exception_guard(location="run_training() -> 학습 루프", reraise=True)
+@exception_guard(location="run_training()", reraise=True)
 def run_training() -> None:
     """
-    전체 학습 파이프라인을 실행한다.
-    1. metadata.csv 로드 -> HuggingFace Dataset 변환
-    2. 오디오 피처 추출 + 텍스트 토큰화 (map)
-    3. 베이스 모델 로딩 + LoRA 적용
-    4. Seq2SeqTrainer로 학습 (체크포인트 재개 지원)
-    5. 최종 모델 저장
+    전체 학습 파이프라인을 총괄하는 메인 함수입니다.
+    데이터 준비부터 모델 로딩, LoRA 적용, 최종 학습 및 저장까지의 전 과정을 제어합니다.
     """
-    # ---- 1. 데이터셋 로드 ----
-    # 학습에 필요한 메타데이터 파일이 존재하는지 검사
+    
+    # ---- [1단계] 데이터셋 경로 확보 및 메타데이터 로드 ----
+    # 학습의 재료가 되는 metadata.csv 파일이 있는지 먼저 확인합니다.
     if not os.path.exists(METADATA_PATH):
-        raise TrainingError(f"metadata.csv 없음: {METADATA_PATH}. 먼저 01_build_dataset.py를 실행하세요.")
+        raise TrainingError(f"metadata.csv 파일을 찾을 수 없습니다: {METADATA_PATH}")
 
-    # CSV 파일을 읽어 데이터프레임 생성
+    # CSV를 읽어 오디오 파일의 절대 경로 리스트와 전사(Transcription) 텍스트를 준비합니다.
     df = pd.read_csv(METADATA_PATH, encoding="utf-8-sig")
-    logger.info(f"학습 데이터: {len(df)}개 샘플")
+    audio_paths = [os.path.join(DATASET_DIR, x) for x in df["file_name"].tolist()]
+    transcriptions = df["transcription"].tolist()
+    logger.info(f"[INFO] 학습 데이터 로드 완료: 총 {len(df)}개의 샘플을 준비했습니다.")
 
-    # 상대 경로로 기록된 파일명을 절대 경로로 변환하여 오디오 경로 생성
-    df["audio"] = df["file_name"].apply(lambda x: os.path.join(DATASET_DIR, x))
-
-    # 데이터프레임을 HuggingFace 데이터셋 객체로 변환
-    dataset = Dataset.from_dict({
-        "audio": df["audio"].tolist(),
-        "transcription": df["transcription"].tolist()
-    })
-    # [수정] cast_column(Audio)를 사용하지 않고 직접 경로만 유지 (map에서 로드함)
-
-    # ---- 2. 모델/프로세서 로드 ----
-    # 베이스 Whisper 모델과 통합 프로세서 로드
-    model, processor = load_base_model()
-    # 특징 추출기 및 토크나이저 개별 로드 (전처리용)
-    feature_extractor = WhisperFeatureExtractor.from_pretrained(CFG["model_id"])
-    tokenizer         = WhisperTokenizer.from_pretrained(
-        CFG["model_id"], language=CFG["language"], task=CFG["task"]
+    # ---- [2단계] 모델 및 프로세서(토크나이저) 로딩 ----
+    # 사용자가 설정한 베이스 모델(예: whisper-tiny)을 불러옵니다.
+    model_id = CFG["model_id"]
+    
+    # [Windows CPU 최적화 포인트]
+    # 1. torch_dtype=torch.float32: CPU에서 가장 안정적인 연산 정밀도를 강제합니다.
+    # 2. low_cpu_mem_usage=False: 윈도우의 메모리 할당 방식과의 충돌을 방지합니다.
+    model = WhisperForConditionalGeneration.from_pretrained(
+        model_id, 
+        torch_dtype=torch.float32, 
+        low_cpu_mem_usage=False
+    )
+    
+    # 학습 시 불필요하게 디코딩을 간섭하는 설정들을 초기화하여 충돌을 방지합니다.
+    model.config.forced_decoder_ids = None
+    model.config.suppress_tokens = []
+    
+    # [중요] model.config.use_cache = False:
+    # 윈도우에서 'WinError 87'을 일으키는 가장 큰 원인 중 하나인 그래디언트 체크포인팅 충돌을 해결합니다.
+    model.config.use_cache = False
+    
+    # 오디오 특징 추출 및 텍스트 토큰화를 담당하는 프로세서를 로드합니다.
+    processor = WhisperProcessor.from_pretrained(
+        model_id, language=CFG["language"], task=CFG["task"]
     )
 
-    # ---- 3. 전처리 map 적용 ----
-    # 오디오 특징 추출 및 텍스트 토큰화를 수행할 함수 생성
-    prepare_fn = _make_prepare_fn(feature_extractor, tokenizer)
-    # 데이터셋 전체에 전처리 함수 적용 (병렬 처리는 Windows 환경 안정성을 위해 1로 설정)
-    dataset = dataset.map(
-        prepare_fn,
-        remove_columns=dataset.column_names,
-        num_proc=1,  # Windows 멀티프로세싱 이슈 방지
+    # ---- [3단계] 스트리밍 데이터셋(IterableDataset) 구성 ----
+    # [Windows 최적화 핵심] 
+    # 데이터를 한꺼번에 메모리에 올리지 않고 학습할 때 실시간으로 하나씩 읽어오는 방식을 채택합니다.
+    # 이는 윈도우의 고질적인 'Memory Mapping' 오류를 원천 차단하는 가장 강력한 해결책입니다.
+    prepare_fn = _make_prepare_fn(processor.feature_extractor, processor.tokenizer)
+    train_dataset = IterableDataset.from_generator(
+        dataset_generator, 
+        gen_kwargs={
+            "audio_list": audio_paths,
+            "transcription_list": transcriptions,
+            "model_id": model_id,
+            "language": CFG["language"],
+            "task": CFG["task"]
+        }
     )
 
-    # ---- 4. LoRA 적용 ----
-    # 모델의 특정 레이어만 학습하도록 LoRA 어댑터 설정 및 주입
+    # ---- [4단계] LoRA(Low-Rank Adaptation) 어댑터 주입 ----
+    # 베이스 모델의 가중치는 고정하고 효율적인 학습을 위한 LoRA 레이어를 추가합니다.
+    # 이를 통해 저사양 환경(CPU)에서도 강력한 성능 향상을 꾀할 수 있습니다.
     model = apply_lora(model)
 
-    # ---- 5. 학습 인수 설정 ----
-    # 기존에 중단된 학습이 있다면 체크포인트에서 재개하도록 경로 검색
+    # ---- [5단계] 체크포인트 자동 검색 및 재개 설정 ----
+    # 만약 이전에 학습하다가 멈춘 기록(checkpoint-*)이 있다면 자동으로 찾아냅니다.
     resume_checkpoint = None
     if os.path.exists(LORA_DIR):
-        # 출력 디렉터리 내의 모든 체크포인트 폴더 수집
-        ckpts = [
-            d for d in os.listdir(LORA_DIR)
-            if d.startswith("checkpoint-") and os.path.isdir(os.path.join(LORA_DIR, d))
-        ]
+        ckpts = [d for d in os.listdir(LORA_DIR) if d.startswith("checkpoint-")]
         if ckpts:
-            # 가장 큰 스텝 번호를 가진 최신 체크포인트 선정
+            # 가장 마지막에 저장된(숫자가 가장 큰) 체크포인트를 선정합니다.
             latest = sorted(ckpts, key=lambda x: int(x.split("-")[-1]))[-1]
             resume_checkpoint = os.path.join(LORA_DIR, latest)
-            logger.info(f"체크포인트에서 재개: {resume_checkpoint}")
+            logger.info(f"[RESUME] 이전 학습 기록을 발견했습니다! {resume_checkpoint} 지점부터 이어서 진행합니다.")
 
-    # HuggingFace Trainer용 학습 하이퍼파라미터 설정
+    # ---- [6단계] 학습 파라미터(Seq2SeqTrainingArguments) 설정 ----
+    # 윈도우 CPU 환경에서 가장 '안전'하고 '안정적'인 설정값들을 배치합니다.
     training_args = Seq2SeqTrainingArguments(
-        output_dir                  = LORA_DIR,               # 모델 결과 저장 경로
-        per_device_train_batch_size = CFG["batch_size"],      # 장치당 배치 크기
-        gradient_accumulation_steps = CFG["gradient_accumulation"], # 경사 누적 스텝 수
-        learning_rate               = CFG["learning_rate"],   # 초기 학습률
-        warmup_steps                = CFG["warmup_steps"],    # 워밍업 스텝 수
-        max_steps                   = CFG["max_steps"],       # 최대 학습 스텝
-        gradient_checkpointing      = True,                   # 메모리 절약을 위한 체크포인팅 활성화
-        fp16                        = False,                  # 혼합 정밀도 학습 (CPU 환경이므로 비활성화)
-        evaluation_strategy         = "no",                   # 검증 생략 (학습 가속화)
+        output_dir                  = LORA_DIR,               # 결과물 저장 경로
+        per_device_train_batch_size = CFG["batch_size"],      # 한 번에 공부할 데이터 양
+        gradient_accumulation_steps = CFG["gradient_accumulation"], # 경사 누적 (메모리 절약 기술)
+        learning_rate               = CFG["learning_rate"],   # 학습 속도 조절
+        warmup_steps                = CFG["warmup_steps"],    # 초반 적응 기간
+        max_steps                   = CFG["max_steps"],       # 총 학습 횟수
+        gradient_checkpointing      = False,                  # [Windows CPU] 안정성을 위해 비활성화
+        fp16                        = False,                  # [Windows CPU] 반정밀도 연산 제외
+        bf16                        = False,                  # [Windows CPU] bfloat16 제외
+        evaluation_strategy         = "no",                   # 검증 생략 (오직 학습에만 집중)
         save_steps                  = CFG["save_steps"],      # 모델 저장 주기
-        save_total_limit            = 3,                      # 최근 3개의 체크포인트만 유지
+        save_total_limit            = 3,                      # 최근 3개의 체크포인트만 유지 (용량 관리)
         logging_steps               = CFG["logging_steps"],   # 로그 기록 주기
-        report_to                   = ["tensorboard"],        # 텐서보드 시각화 연동
-        load_best_model_at_end      = False,                  # 마지막 모델을 최적으로 간주
-        label_names                 = ["labels"],             # 손실 계산에 사용할 레이블 키
-        push_to_hub                 = False,                  # 허브 업로드 비활성화
-        remove_unused_columns       = False,                  # 데이터셋 컬럼 유지
+        report_to                   = "none",                 # 외부 연동 최소화
+        dataloader_num_workers      = 0,                      # [Windows] 멀티프로세싱 충돌 방지 핵심
+        dataloader_pin_memory       = False,                  # [Windows] WinError 87 방지 핵심
+        remove_unused_columns       = False,                  # 데이터셋 컬럼 유실 방지
+        push_to_hub                 = False,                  # 온라인 업로드 비활성화
+        optim                       = "adamw_torch",          # 표준 옵티마이저 강제
     )
 
-    # 패딩 및 마스킹을 수행할 데이터 콜레이터 인스턴스 생성
+    # 데이터를 묶어줄 콜레이터와 시각적 피드백을 위한 대시보드 콜백을 생성합니다.
     data_collator = DataCollatorSpeechSeq2SeqWithPadding(processor=processor)
-    # 실시간 대시보드 갱신을 위한 콜백 인스턴스 생성
     callback      = DashboardCallback()
 
-    # 최종 Trainer 객체 초기화
+    # 최종적인 Trainer 객체를 초기화합니다.
     trainer = Seq2SeqTrainer(
         args           = training_args,
         model          = model,
-        train_dataset  = dataset,
+        train_dataset  = train_dataset,
         data_collator  = data_collator,
-        tokenizer      = processor.feature_extractor,
         callbacks      = [callback],
     )
 
-    # ---- 6. 학습 실행 (체크포인트 재개) ----
-    # 실시간 모니터링 대시보드 컨텍스트 내에서 학습 실행
+    # ---- [7단계] 본격적인 학습 실행 (Training Start!) ----
+    logger.info("[START] 모든 준비가 끝났습니다. 학습을 시작합니다.")
+    
+    # 대시보드 컨텍스트를 열어 터미널에 진행 상황을 표시합니다.
     with logger.dashboard_context():
-        logger.set_status("Whisper Fine-tuning 중", "엔진 초기화 완료")
-        logger.info("학습 프로세스 시작...")
-        # 학습 시작 (이전 체크포인트가 있으면 자동으로 재개)
-        trainer.train(resume_from_checkpoint=resume_checkpoint)
-
-        # ---- 7. 최종 저장 ----
-        logger.set_status("모델 저장 중")
-        # 최종 학습된 LoRA 가중치 저장
-        trainer.save_model(LORA_DIR)
-        # 추론 시 함께 사용할 프로세서 정보 저장
-        processor.save_pretrained(LORA_DIR)
-        logger.success(f"학습 완료! LoRA 어댑터 저장됨: {LORA_DIR}")
+        try:
+            logger.set_status("Whisper Fine-tuning", "Engine Ready")
+            # 학습 시작! (체크포인트가 있다면 자동으로 그 시점부터 로드합니다.)
+            trainer.train(resume_from_checkpoint=resume_checkpoint)
+            
+            # ---- [8단계] 학습 완료 후 최종 저장 ----
+            logger.set_status("Saving Model", "Complete")
+            # 최종 학습된 LoRA 가중치를 디스크에 영구 저장합니다.
+            trainer.save_model(LORA_DIR)
+            # 추론 시 꼭 필요한 프로세서 정보도 함께 저장합니다.
+            processor.save_pretrained(LORA_DIR)
+            logger.success(f"[SUCCESS] 학습이 무사히 완료되었습니다. 저장 위치: {LORA_DIR}")
+            
+        except Exception as e:
+            # 예상치 못한 에러 발생 시 상세한 기록을 남기고 상위로 던집니다.
+            error_msg = f"[ERROR] 학습 루프 중 치명적 오류 발생: {e}\n{traceback.format_exc()}"
+            logger.error(error_msg)
+            raise e

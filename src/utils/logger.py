@@ -7,6 +7,7 @@ import psutil
 from datetime import datetime
 from rich.console import Console
 from rich.live import Live
+from win10toast import ToastNotifier
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
@@ -68,6 +69,23 @@ def create_status_layout():
         padding=(0, 1)
     )
 
+# 윈도우 알림 객체 초기화
+_notifier = ToastNotifier()
+
+def notify_windows(title: str, message: str, duration: int = 5):
+    """윈도우 시스템 트레이 알림을 띄운다. (버그 방지형)"""
+    try:
+        # 파이썬 3.12+ 윈도우 알림 버그 방지를 위해 비동기 처리 시 주의
+        _notifier.show_toast(
+            title,
+            message,
+            duration=duration,
+            threaded=True
+        )
+    except Exception:
+        # 알림 오류가 학습을 방해하지 않도록 무시
+        pass
+
 def _write_to_file(level: str, message: str):
     os.makedirs(LOG_DIR, exist_ok=True)
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -93,12 +111,12 @@ def warning(message: str):
 def error(message: str):
     _write_to_file("ERROR", message)
     if not state.is_dashboard_active:
-        console.print(f"[bold red]ERR [/] [red]{message}[/]", style="underline")
+        console.print(f"[bold red]ERR [/] {message}")
 
 def success(message: str):
     _write_to_file("SUCCESS", message)
     if not state.is_dashboard_active:
-        console.print(f"[bold green]OK  [/] [green]{message}[/]")
+        console.print(f"[bold green]OK  [/] {message}")
 
 def dashboard_context():
     state.start_time = datetime.now()
