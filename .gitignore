@@ -1,0 +1,25 @@
+# --- 파이썬 캐시 ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# --- 가상환경 ---
+venv/
+.env
+
+# --- 학습 결과물 (대용량 모델은 git에 올리지 않는다) ---
+outputs/
+logs/
+
+# --- 데이터셋 원본 (개인 수집 데이터, 저작권 이슈) ---
+dataset/
+!dataset/.gitkeep
+
+# --- 설정 파일 민감 정보 ---
+*.secret.yaml
+
+# --- OS 파일 ---
+.DS_Store
+Thumbs.db

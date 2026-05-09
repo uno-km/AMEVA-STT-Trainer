@@ -1,0 +1,26 @@
+# Core AI / Training
+torch
+torchaudio
+transformers
+datasets
+peft
+accelerate
+evaluate
+jiwer
+
+# Audio
+librosa
+soundfile
+pydub
+
+# Data Acquisition
+yt-dlp
+webvtt-py
+
+# Utilities
+pandas
+pyyaml
+tqdm
+huggingface-hub
+rich
+psutil
