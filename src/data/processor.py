@@ -20,7 +20,7 @@ from src.utils.audio_utils import load_wav, export_chunk, slice_audio
 
 
 # ---------------------------------------------------------------------------- #
-#  텍스트 정제                                                                   #
+#  텍스트 정제 및 병합                                                            #
 # ---------------------------------------------------------------------------- #
 
 def clean_text(text: str) -> str:
@@ -40,6 +40,46 @@ def clean_text(text: str) -> str:
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
+def merge_texts(old_text: str, new_text: str) -> str:
+    """
+    유튜브 자동 자막의 특징(이전 텍스트 반복)을 고려하여 중복 없이 병합한다.
+    글자 단위로 겹치는 구간을 찾아 가장 긴 일치 구간을 제거한다.
+    """
+    if not old_text: return new_text
+    if not new_text: return old_text
+    
+    # 1. 두 텍스트가 완전히 포함 관계인 경우
+    if old_text in new_text: return new_text
+    if new_text in old_text: return old_text
+    
+    # 2. 글자 단위 매칭 (가장 긴 접미사-접두사 일치 확인)
+    # 최소 2글자 이상 겹칠 때만 처리 (너무 짧으면 우연일 수 있음)
+    max_overlap = 0
+    min_len = min(len(old_text), len(new_text))
+    
+    for i in range(min_len, 1, -1):
+        if old_text.endswith(new_text[:i]):
+            max_overlap = i
+            break
+            
+    if max_overlap > 0:
+        return old_text + new_text[max_overlap:]
+    
+    # 3. 어절 단위 매칭 (글자 단위 실패 시 대비)
+    old_words = old_text.split()
+    new_words = new_text.split()
+    word_overlap = 0
+    for i in range(min(len(old_words), len(new_words)), 0, -1):
+        if old_words[-i:] == new_words[:i]:
+            word_overlap = i
+            break
+            
+    if word_overlap > 0:
+        return " ".join(old_words + new_words[word_overlap:])
+    
+    # 겹치는 게 전혀 없으면 공백으로 연결
+    return old_text + " " + new_text
+
 
 # ---------------------------------------------------------------------------- #
 #  VTT 파싱                                                                      #
@@ -58,18 +98,27 @@ def parse_vtt(vtt_path: str) -> List[Dict]:
     # 유효한 캡션 딕셔너리를 담을 리스트
     captions = []
     # webvtt-py 라이브러리로 VTT 파일의 각 캡션을 순회
+    last_raw_text = ""
     for cap in webvtt.read(vtt_path):
-        # 노이즈 태그 제거 후 정제된 텍스트
-        text = clean_text(cap.text)
+        # 원본 텍스트를 정제
+        raw_text = cap.text.strip()
+        # 이전 캡션과 내용이 거의 같으면 중복으로 간주하고 스킵
+        if raw_text == last_raw_text:
+            continue
+        
+        text = clean_text(raw_text)
         # 정제 후 텍스트가 비어있으면 해당 캡션은 건너뜀
         if not text:
             continue
-        # webvtt-py의 start/end는 'HH:MM:SS.mmm' 문자열 -> 밀리초로 변환
+            
         captions.append({
             "start_ms": _time_to_ms(cap.start),
             "end_ms"  : _time_to_ms(cap.end),
             "text"    : text,
+            "raw"     : raw_text # 중복 체크용
         })
+        last_raw_text = raw_text
+        
     return captions
 
 
@@ -134,17 +183,16 @@ def process_video(
 
     # 설정에서 최대 청크 길이(밀리초) 로드
     max_dur = CFG["max_chunk_duration_ms"]
-
     # metadata.csv 에 추가될 레코드 목록
-    entries: List[Dict[str, str]] = []
-    # 현재 누적 중인 청크의 텍스트 (공백으로 시작)
-    cur_text     = ""
+    entries = []
+    # 현재 누적 중인 청크의 텍스트
+    cur_text = ""
     # 현재 청크의 시작 밀리초 (-1은 아직 초기화 전을 의미)
     cur_start_ms = -1
     # 현재 청크의 끝 밀리초
-    cur_end_ms   = 0
+    cur_end_ms = 0
     # 저장된 청크 번호 (파일명 생성에 사용)
-    chunk_idx    = 0
+    chunk_idx = 0
 
     def _flush(start_ms: int, end_ms: int, text: str) -> None:
         """현재 누적된 청크를 저장하는 내부 헬퍼."""
@@ -153,9 +201,9 @@ def process_video(
         # 4자리 0패딩 청크 파일명 생성 (예: chunk_0001.wav)
         chunk_filename = f"chunk_{chunk_idx:04d}.wav"
         # 절대 경로로 저장 위치 결정
-        chunk_abs      = os.path.join(chunks_abs_dir, chunk_filename)
+        chunk_abs = os.path.join(chunks_abs_dir, chunk_filename)
         # file_name에는 dataset/ 기준 상대 경로를 저장
-        chunk_rel      = os.path.join(y, m, d, video_id, "chunks", chunk_filename)
+        chunk_rel = os.path.join(y, m, d, video_id, "chunks", chunk_filename)
 
         # 오디오 슬라이싱 (앞뒤 패딩 포함)
         sliced = slice_audio(audio, start_ms, end_ms)
@@ -185,8 +233,8 @@ def process_video(
             cur_end_ms   = end_ms
             cur_text     = text
         else:
-            # 아직 여유 있음 -> 텍스트 누적
-            cur_text   = (cur_text + " " + text).strip()
+            # [핵심 수정] 텍스트 병합 시 중복 제거 로직 적용
+            cur_text = merge_texts(cur_text, text)
             cur_end_ms = end_ms
 
     # 루프 종료 후 남은 마지막 청크 저장

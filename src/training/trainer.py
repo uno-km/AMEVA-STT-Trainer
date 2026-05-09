@@ -11,6 +11,7 @@ Whisper + LoRA 학습 파이프라인.
 import os
 import torch
 import pandas as pd
+import librosa
 from dataclasses import dataclass
 from typing import Any, Dict, List, Union
 
@@ -74,16 +75,18 @@ class DataCollatorSpeechSeq2SeqWithPadding:
 
 def _make_prepare_fn(feature_extractor, tokenizer):
     """
-    feature_extractor와 tokenizer를 클로저로 캡처한
-    dataset.map() 적용 함수를 반환한다.
+    오디오 파일을 직접 로드하여 전처리한다. (torchcodec 에러 방지용)
     """
     def prepare_dataset(batch):
-        # 데이터셋 행으로부터 오디오 데이터 추출
-        audio = batch["audio"]
+        # [수정] 라이브러리에 맡기지 않고 직접 librosa로 오디오 로드
+        path = batch["audio"]
+        audio_array, _ = librosa.load(path, sr=16000)
+        
         # 오디오 신호를 Mel-Spectrogram 입력 특징으로 변환
         batch["input_features"] = feature_extractor(
-            audio["array"], sampling_rate=audio["sampling_rate"]
+            audio_array, sampling_rate=16000
         ).input_features[0]
+        
         # 전사 텍스트를 토큰 ID 리스트로 변환
         batch["labels"] = tokenizer(batch["transcription"]).input_ids
         return batch
@@ -116,13 +119,12 @@ def run_training() -> None:
     # 상대 경로로 기록된 파일명을 절대 경로로 변환하여 오디오 경로 생성
     df["audio"] = df["file_name"].apply(lambda x: os.path.join(DATASET_DIR, x))
 
-    # 데이터프레임을 HuggingFace 데이터셋 객체로 변환 (pyarrow 에러 방지를 위해 from_dict 사용)
+    # 데이터프레임을 HuggingFace 데이터셋 객체로 변환
     dataset = Dataset.from_dict({
         "audio": df["audio"].tolist(),
         "transcription": df["transcription"].tolist()
     })
-    # 오디오 컬럼을 실제 오디오 데이터 타입으로 캐스팅 (리샘플링 포함)
-    dataset = dataset.cast_column("audio", Audio(sampling_rate=CFG["sample_rate"]))
+    # [수정] cast_column(Audio)를 사용하지 않고 직접 경로만 유지 (map에서 로드함)
 
     # ---- 2. 모델/프로세서 로드 ----
     # 베이스 Whisper 모델과 통합 프로세서 로드
