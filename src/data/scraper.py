@@ -40,43 +40,53 @@ VideoInfo = Tuple[str, str, Optional[str], Optional[str]]
 # ---------------------------------------------------------------------------- #
 
 @exception_guard(location="get_video_info_list() -> yt-dlp 채널 조회", reraise=True)
-def get_video_info_list(channel_url: str, count: int) -> List[Tuple[str, str]]:
+def get_video_info_list(channel_url: str, count: int) -> List[Tuple[str, str, str]]:
     """
-    채널에서 최신 N개 영상의 (video_id, upload_date) 튜플 목록을 반환한다.
+    채널에서 최신 N개 영상의 (video_id, upload_date, title) 튜플 목록을 반환한다.
     upload_date 형식: YYYYMMDD (예: 20260423)
     """
     logger.info(f"채널 조회 시작: {channel_url} (최대 {count}개)")
 
-    # yt-dlp: ID와 업로드 날짜를 파이프(|) 구분자로 출력
-    # sys.executable -m yt_dlp를 사용하여 현재 가상환경의 패키지를 명시적으로 호출
+    # yt-dlp: ID, 업로드 날짜, 제목을 파이프(|) 구분자로 출력
     cmd = [
         sys.executable, "-m", "yt_dlp",
-        "--print", "%(id)s|%(upload_date)s",  # 출력 포맷: video_id|날짜
+        "--print", "%(id)s|%(upload_date)s|%(title)s",  # 출력 포맷: id|날짜|제목
         "--playlist-items", f"1:{count}",      # 최신 count개만 가져오기
         "--flat-playlist",                     # 영상 내용은 다운로드하지 않고 목록만 수집
         "--no-warnings",
         channel_url,
     ]
-    # 서브프로세스로 yt-dlp 실행, stdout/stderr 을 문자열로 캡처
-    result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
+    
+    # [수정] 인코딩 오류 방지를 위해 바이트 단위로 캡처 후 수동 디코딩
+    result = subprocess.run(cmd, capture_output=True, text=False)
 
     # 반환 코드가 0이 아니면 yt-dlp 실행 실패
     if result.returncode != 0:
-        raise NetworkError(f"yt-dlp 채널 조회 실패:\n{result.stderr[:500]}")
+        err_msg = result.stderr.decode("utf-8", errors="ignore") if result.stderr else "알 수 없는 오류"
+        raise NetworkError(f"yt-dlp 채널 조회 실패:\n{err_msg[:500]}")
 
-    # 수집된 (video_id, date_str) 쌍을 담을 리스트
+    # stdout 이 비어있으면 빈 리스트 반환
+    if not result.stdout:
+        return []
+
+    # 바이트 데이터를 문자열로 변환 (한글 인코딩 충돌 방지를 위해 errors="ignore" 적용)
+    output = result.stdout.decode("utf-8", errors="ignore")
+    
     pairs = []
-    # stdout 을 줄 단위로 순회
-    for line in result.stdout.strip().split("\n"):
+    # 출력된 텍스트를 줄 단위로 순회
+    for line in output.strip().split("\n"):
         line = line.strip()
-        # 파이프 구분자가 없는 줄은 유효하지 않으므로 스킵
-        if "|" not in line:
+        # 파이프 구분자가 최소 2개(id|date|title) 있어야 함
+        if line.count("|") < 2:
             continue
-        # 첫 번째 파이프를 기준으로 video_id 와 날짜 분리
-        vid, date_str = line.split("|", 1)
-        # date_str이 "NA"인 경우도 수집할 수 있도록 수정 (unknown 폴더로 이동됨)
+        # 첫 번째와 두 번째 파이프를 기준으로 분리
+        parts = line.split("|", 2)
+        vid      = parts[0].strip()
+        date_str = parts[1].strip() if parts[1] else "unknown"
+        title    = parts[2].strip() if len(parts) > 2 else "Untitled"
+        
         if vid:
-            pairs.append((vid.strip(), date_str.strip() if date_str else "unknown"))
+            pairs.append((vid, date_str, title))
 
     logger.info(f"영상 {len(pairs)}개 정보 확인 완료")
     return pairs
@@ -144,11 +154,12 @@ def download_video_data(video_id: str, video_dir: str) -> Tuple[Optional[str], O
             "-o", os.path.join(video_dir, "raw.%(ext)s"),
             url,
         ])
-        # 오디오 다운로드 실행
-        res = subprocess.run(audio_cmd, capture_output=True, text=True, encoding="utf-8")
+        # 오디오 다운로드 실행 (바이트 캡처로 인코딩 충돌 방지)
+        res = subprocess.run(audio_cmd, capture_output=True, text=False)
         # 실패 또는 파일 미생성·0바이트이면 audio_path 를 None 으로 표시
         if res.returncode != 0 or not os.path.exists(audio_path) or os.path.getsize(audio_path) == 0:
-            logger.error(f"오디오 다운로드 실패: {video_id}\n{res.stderr[:300]}")
+            err_msg = res.stderr.decode("utf-8", errors="ignore") if res.stderr else "오류"
+            logger.error(f"오디오 다운로드 실패: {video_id}\n{err_msg[:300]}")
             audio_path = None
 
     # ----- VTT 자막: 이미 존재하면 스킵 -----
@@ -165,7 +176,7 @@ def download_video_data(video_id: str, video_dir: str) -> Tuple[Optional[str], O
             url,
         ]
         # 자막 다운로드 실행
-        res = subprocess.run(vtt_cmd, capture_output=True, text=True, encoding="utf-8")
+        res = subprocess.run(vtt_cmd, capture_output=True, text=False)
         # 파일이 생성되지 않았거나 0바이트이면 vtt_path 를 None 으로 표시
         if not os.path.exists(vtt_path) or os.path.getsize(vtt_path) == 0:
             logger.warning(f"VTT 자막 없음 (자막 미제공 영상일 수 있음): {video_id}")
@@ -187,13 +198,17 @@ def scrape_channel() -> List[VideoInfo]:
     channel_url = CFG["channel_url"]
     max_videos  = CFG["max_videos"]
 
-    # 영상 ID 와 날짜 목록 수집
+    # 영상 ID, 날짜, 제목 목록 수집
     pairs = get_video_info_list(channel_url, max_videos)
     # 수집 결과를 담을 리스트 초기화
     results: List[VideoInfo] = []
 
     # 각 영상에 대해 폴더 경로 결정 후 오디오·자막 다운로드
-    for video_id, date_str in pairs:
+    for idx, (video_id, date_str, title) in enumerate(pairs):
+        # 대시보드 상태 업데이트: 현재 다운로드 중인 영상 제목 표시
+        display_title = (title[:25] + "..") if len(title) > 25 else title
+        logger.set_status("유튜브 수집 중", f"[{idx+1}/{len(pairs)}] {display_title}")
+        
         # 날짜 기반 저장 폴더 경로 계산
         video_dir = date_to_folder(date_str, video_id)
         # 다운로드 실행 후 결과 경로 수신 (실패 항목은 None)

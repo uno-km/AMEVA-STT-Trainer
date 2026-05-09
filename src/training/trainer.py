@@ -116,8 +116,11 @@ def run_training() -> None:
     # 상대 경로로 기록된 파일명을 절대 경로로 변환하여 오디오 경로 생성
     df["audio"] = df["file_name"].apply(lambda x: os.path.join(DATASET_DIR, x))
 
-    # 데이터프레임을 HuggingFace 데이터셋 객체로 변환
-    dataset = Dataset.from_pandas(df[["audio", "transcription"]])
+    # 데이터프레임을 HuggingFace 데이터셋 객체로 변환 (pyarrow 에러 방지를 위해 from_dict 사용)
+    dataset = Dataset.from_dict({
+        "audio": df["audio"].tolist(),
+        "transcription": df["transcription"].tolist()
+    })
     # 오디오 컬럼을 실제 오디오 데이터 타입으로 캐스팅 (리샘플링 포함)
     dataset = dataset.cast_column("audio", Audio(sampling_rate=CFG["sample_rate"]))
 
@@ -137,7 +140,7 @@ def run_training() -> None:
     dataset = dataset.map(
         prepare_fn,
         remove_columns=dataset.column_names,
-        num_proc=1,
+        num_proc=1,  # Windows 멀티프로세싱 이슈 방지
     )
 
     # ---- 4. LoRA 적용 ----

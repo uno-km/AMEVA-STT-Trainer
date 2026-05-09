@@ -66,17 +66,17 @@ def create_status_layout():
     table.add_column(justify="left", ratio=1)
     table.add_column(justify="right", ratio=1)
 
-    # 왼쪽: 현재 작업 상태 + 스피너
+    # 왼쪽: 현재 작업 상태 + 구분선
     status_text = Text.assemble(
-        (f" ⚙️  {state.current_task} ", "bold magenta"),
+        (f" [TASK] {state.current_task} ", "bold magenta"),
         (f" | {state.sub_task}", "dim white") if state.sub_task else ""
     )
     
     # 오른쪽: 시스템 자원 정보 (동적 색상 적용)
     sys_info = Text.assemble(
-        (" 💻 CPU ", "bold white"), (f"{cpu:>4}% ", cpu_color),
-        (" 🧠 RAM ", "bold white"), (f"{ram:>4}% ", ram_color),
-        (" ⏳ 경과 ", "bold white"), (f"{elapsed} ", "yellow")
+        (" CPU ", "bold white"), (f"{cpu:>4}% ", cpu_color),
+        (" RAM ", "bold white"), (f"{ram:>4}% ", ram_color),
+        (" TIME ", "bold white"), (f"{elapsed} ", "yellow")
     )
 
     # 두 열에 상태 텍스트와 시스템 정보를 각각 배치
