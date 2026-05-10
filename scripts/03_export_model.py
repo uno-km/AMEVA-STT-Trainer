@@ -59,6 +59,24 @@ def main():
             ], check=True)
             print("✅ 도구 클론 완료!")
 
+        # ---- 2.5단계: 변환용 미싱 파일 보완 (added_tokens.json 등) ----
+        added_tokens_path = os.path.join(merged_path, "added_tokens.json")
+        if not os.path.exists(added_tokens_path):
+            with open(added_tokens_path, "w", encoding="utf-8") as f:
+                f.write("{}")
+            print("[*] 미싱 파일 생성: added_tokens.json")
+
+        whisper_assets_dir = os.path.join(third_party_dir, "whisper_assets")
+        
+        # 에셋 도구가 없으면 파이썬이 직접 다운로드 시도 로직 (이미 되어있으므로 경로만 설정)
+        if not os.path.exists(whisper_assets_dir):
+            print("[!] Whisper 에셋이 없습니다. 자동으로 다운로드를 시작합니다...")
+            os.makedirs(os.path.join(whisper_assets_dir, "whisper", "assets"), exist_ok=True)
+            asset_url = "https://raw.githubusercontent.com/openai/whisper/main/whisper/assets/mel_filters.npz"
+            asset_out = os.path.join(whisper_assets_dir, "whisper", "assets", "mel_filters.npz")
+            subprocess.run(["powershell", "-Command", f"Invoke-WebRequest -Uri {asset_url} -OutFile {asset_out}"], check=True)
+            print("✅ 에셋 다운로드 완료!")
+
         # ---- 3단계: GGUF(GGML) 변환 실행 ----
         print("[*] GGUF 변환 중: 모델 포맷을 GGML로 변환하는 중... (수 분 소요)")
         
@@ -70,6 +88,7 @@ def main():
         process = subprocess.run([
             sys.executable, converter_script, 
             merged_path, 
+            whisper_assets_dir, # <-- 이제 진짜 에셋 경로를 줍니다!
             "." 
         ])
         

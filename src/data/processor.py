@@ -128,6 +128,9 @@ def parse_vtt(vtt_path: str) -> List[Dict]:
         
         text = clean_text(raw_text)
         
+        # [심화 모드 전용] 텍스트 고도화 정제
+        # processor_video에서 mode를 받아올 수 없으므로, 여기서 일단 기본 정제 후 위에서 처리
+        
         # 정제 후 텍스트가 비어있으면 해당 캡션은 건너뜀
         if not text:
             continue

@@ -114,6 +114,8 @@ def merge_and_save():
     # 프로세서도 같은 디렉터리에 저장 (추론 시 함께 필요)
     processor = WhisperProcessor.from_pretrained(model_id)
     processor.save_pretrained(MERGED_DIR)
+    # whisper.cpp 변환 스크립트가 요구하는 vocab.json 파일을 강제로 생성
+    processor.tokenizer.save_vocabulary(MERGED_DIR)
 
     logger.info(f"병합 완료 -> {MERGED_DIR}")
     return MERGED_DIR
