@@ -5,7 +5,8 @@ src/utils/audio_utils.py
 """
 import os
 import sys
-from pydub import AudioSegment
+from pydub import AudioSegment, effects
+from pydub.silence import split_on_silence
 from src.core.config import CFG
 from src.core.exceptions import AudioError
 
@@ -57,3 +58,19 @@ def slice_audio(audio: AudioSegment, start_ms: int, end_ms: int) -> AudioSegment
     s = max(0, start_ms - pad)
     e = min(len(audio), end_ms + pad)
     return audio[s:e]
+
+def normalize_audio(audio: AudioSegment) -> AudioSegment:
+    """오디오 음량을 표준 레벨로 맞춘다."""
+    return effects.normalize(audio)
+
+def trim_silence(audio: AudioSegment) -> AudioSegment:
+    """오디오 앞뒤의 침묵을 제거한다."""
+    # -40dB 이하를 침묵으로 간주, 최소 침묵 길이는 500ms
+    chunks = split_on_silence(audio, min_silence_len=500, silence_thresh=-40, keep_silence=100)
+    if not chunks:
+        return audio
+    # 잘려진 청크들을 다시 합쳐서 반환
+    combined = AudioSegment.empty()
+    for chunk in chunks:
+        combined += chunk
+    return combined

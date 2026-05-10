@@ -14,6 +14,7 @@ import pandas as pd
 from collections import Counter
 from rich.table import Table
 from rich.panel import Panel
+import argparse
 
 # 프로젝트 루트 디렉터리를 Python 경로에 등록
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -92,10 +93,14 @@ def run_full_investigation():
 
 
 def main():
+    parser = argparse.ArgumentParser(description="AMEVA-STT Dataset Builder")
+    parser.add_argument("--mode", type=str, default="basic", choices=["basic", "advanced"], help="전처리 모드 선택 (basic: 25초 고정, advanced: 15초 스마트)")
+    args = parser.parse_args()
+
     # 실시간 대시보드 화면 활성화
     with logger.dashboard_context():
         logger.info("=" * 50)
-        logger.info("[1단계] 데이터셋 빌드 시작 (Parallel & Rich)")
+        logger.info(f"[1단계] 데이터셋 빌드 시작 (모드: {args.mode.upper()})")
         logger.info("=" * 50)
 
         # 1. 유튜브 채널 정보 수집 및 다운로드
@@ -116,8 +121,8 @@ def main():
             # 진행 상황 업데이트
             logger.set_status("오디오 전처리 중", f"[{i+1}/{len(video_list)}] {vid} 분할 중")
             
-            # 자막 중복 제거 및 청크 생성 로직 실행
-            entries = process_video(vid, date_str, a_path, v_path)
+            # 자막 중복 제거 및 청크 생성 로직 실행 (모드 전달)
+            entries = process_video(vid, date_str, a_path, v_path, mode=args.mode)
             all_entries.extend(entries)
 
         # 3. metadata.csv 저장

@@ -56,8 +56,8 @@ DEFAULTS = {
     "gradient_accumulation"  : 8,            # 실질 배치 크기 = batch_size × gradient_accumulation
     "learning_rate"          : 1e-3,         # LoRA 어댑터 학습률
     "max_steps"              : 1000,         # 전체 학습 스텝 수
-    "save_steps"             : 200,          # 체크포인트 저장 주기
-    "logging_steps"          : 20,           # 로그 출력 주기
+    "save_steps"             : 50,           # 체크포인트 저장 주기
+    "logging_steps"          : 10,           # 로그 출력 주기
     "warmup_steps"           : 50,           # 학습률 워밍업 스텝 수
     "lora_r"                 : 32,           # LoRA 저차원 랭크(r)
     "lora_alpha"             : 64,           # LoRA 스케일링 인자(α)

@@ -79,7 +79,8 @@ def check_resources(skip_confirm: bool = False) -> bool:
 
 def main():
     parser = argparse.ArgumentParser(description="AMEVA-STT Training Script")
-    parser.add_argument("--skip", "-s", action="store_true", help="Skip confirmation prompt")
+    parser.add_argument("--skip", action="store_true", help="기존 데이터셋 생성을 건너뛰고 학습만 시작")
+    parser.add_argument("--resume_from_checkpoint", type=str, default=None, help="학습을 재개할 체크포인트 경로")
     args = parser.parse_args()
 
     logger.info("=" * 50)
@@ -93,7 +94,7 @@ def main():
 
     # 2. 학습 실행
     try:
-        run_training()
+        run_training(resume_from_checkpoint=args.resume_from_checkpoint)
     except Exception as e:
         logger.error(f"학습 도중 오류 발생: {e}")
 

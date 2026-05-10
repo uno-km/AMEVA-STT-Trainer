@@ -17,8 +17,8 @@ batch_size: 2
 gradient_accumulation: 8
 learning_rate: 0.001
 max_steps: 1000
-save_steps: 200
-logging_steps: 20
+save_steps: 50
+logging_steps: 10
 warmup_steps: 50
 
 # ---- LoRA ----

@@ -16,7 +16,7 @@ from typing import List, Dict, Optional
 from src.core.config import CFG, DATASET_DIR
 from src.core.exceptions import TranscriptError, exception_guard
 from src.utils import logger
-from src.utils.audio_utils import load_wav, export_chunk, slice_audio
+from src.utils.audio_utils import load_wav, export_chunk, slice_audio, normalize_audio, trim_silence
 
 
 # ---------------------------------------------------------------------------- #
@@ -38,6 +38,26 @@ def clean_text(text: str) -> str:
     text = text.replace("♪", "").replace("&nbsp;", " ")
     # 연속 공백을 단일 공백으로 정규화하고 앞뒤 공백 제거
     text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+def remove_fillers(text: str) -> str:
+    """한국어 및 슈카 특화 추임새(Filler)를 대폭 제거한다."""
+    # 슈카 아저씨 및 일반 한국어 다빈도 추임새
+    fillers = [
+        "음", "어", "그", "아니", "이제", "막", "근데", "사실", "어떻게", "보면",
+        "약간", "그게", "진짜", "그니까", "막말로", "뭐", "뭐냐", "일단", "그다음에"
+    ]
+    # 단어 경계(\b)와 문장 부호를 고려한 정규식
+    for f in fillers:
+        text = re.sub(rf"\b{f}[,\.]*(?=\s|$)", "", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+def standardize_numbers(text: str) -> str:
+    """숫자와 단위를 표준화한다."""
+    # 예: '1,000' -> '1000'
+    text = re.sub(r"(\d),(\d)", r"\1\2", text)
+    # 기호 변환
+    text = text.replace("%", "퍼센트").replace("$", "달러")
     return text
 
 def merge_texts(old_text: str, new_text: str) -> str:
@@ -107,6 +127,7 @@ def parse_vtt(vtt_path: str) -> List[Dict]:
             continue
         
         text = clean_text(raw_text)
+        
         # 정제 후 텍스트가 비어있으면 해당 캡션은 건너뜀
         if not text:
             continue
@@ -154,6 +175,7 @@ def process_video(
     date_str  : str,   # 'YYYYMMDD'
     audio_path: str,
     vtt_path  : str,
+    mode      : str = "basic"
 ) -> List[Dict[str, str]]:
     """
     단일 영상의 오디오를 VTT 기반으로 청크로 분할하고,
@@ -183,6 +205,13 @@ def process_video(
 
     # 설정에서 최대 청크 길이(밀리초) 로드
     max_dur = CFG["max_chunk_duration_ms"]
+    
+    # [심화 모드 전용 설정]
+    if mode == "advanced":
+        logger.info(f"[{video_id}] 심화(Advanced) 모드 전처리 적용 중...")
+        max_dur = 15000  # 15초로 단축 (더 많은 데이터셋 확보)
+        audio = normalize_audio(audio) # 전체 음량 평준화
+    
     # metadata.csv 에 추가될 레코드 목록
     entries = []
     # 현재 누적 중인 청크의 텍스트
@@ -206,7 +235,23 @@ def process_video(
         chunk_rel = os.path.join(y, m, d, video_id, "chunks", chunk_filename)
 
         # 오디오 슬라이싱 (앞뒤 패딩 포함)
-        sliced = slice_audio(audio, start_ms, end_ms)
+        # [심화 모드 전용] 스마트 오버랩 적용 (앞으로 2초 더 가져옴)
+        actual_start = start_ms
+        if mode == "advanced" and start_ms > 2000:
+            actual_start = start_ms - 2000
+            
+        sliced = slice_audio(audio, actual_start, end_ms)
+        
+        # [심화 모드 전용] 오디오 고도화 보정
+        if mode == "advanced":
+            # 1. 저주파 노이즈 억제 (High-pass filter 느낌)
+            sliced = sliced.low_pass_filter(5000).high_pass_filter(200)
+            # 2. 침묵 제거
+            sliced = trim_silence(sliced)
+            # 3. 텍스트 추임새 및 숫자 표준화
+            text = remove_fillers(text)
+            text = standardize_numbers(text)
+
         # WAV 파일로 저장 성공 시 entries 에 레코드 추가
         if export_chunk(sliced, chunk_abs):
             entries.append({"file_name": chunk_rel, "transcription": text})
@@ -226,14 +271,31 @@ def process_video(
             cur_end_ms   = end_ms
             continue
 
-        if (end_ms - cur_start_ms) > max_dur:
-            # 최대 길이 초과 -> 현재까지 누적분을 저장 후 초기화
+        # [전문가 모드] 문장 경계 보호 및 동적 분할 로직
+        duration = end_ms - cur_start_ms
+        is_sentence_end = any(cur_text.rstrip().endswith(p) for p in [".", "?", "!", " "])
+        
+        # 분할 결정 로직
+        should_flush = False
+        if mode == "advanced":
+            # 심화 모드: 15초가 넘었을 때 문장이 끝났거나, 혹은 도저히 안 끝나서 30초를 넘겼을 때만 자름
+            if duration > 15000 and is_sentence_end:
+                should_flush = True
+            elif duration > 30000: # 문장이 안 끝나도 30초면 강제 절삭 (Whisper 한계)
+                should_flush = True
+        else:
+            # 기본 모드: 그냥 25초 넘으면 무조건 자름
+            if duration > max_dur:
+                should_flush = True
+
+        if should_flush:
+            # 현재까지 누적분을 저장 후 초기화
             _flush(cur_start_ms, cur_end_ms, cur_text)
             cur_start_ms = start_ms
             cur_end_ms   = end_ms
             cur_text     = text
         else:
-            # [핵심 수정] 텍스트 병합 시 중복 제거 로직 적용
+            # 텍스트 병합 시 중복 제거 로직 적용
             cur_text = merge_texts(cur_text, text)
             cur_end_ms = end_ms
 

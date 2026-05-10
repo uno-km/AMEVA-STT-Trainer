@@ -110,10 +110,23 @@ def dataset_generator(audio_list, transcription_list, model_id, language, task):
     from transformers import WhisperFeatureExtractor, WhisperTokenizer
     
     # 제너레이터 내부에서 전처리 도구 초기화 (피클링 에러 해결의 핵심)
-    fe = WhisperFeatureExtractor.from_pretrained(model_id)
-    tk = WhisperTokenizer.from_pretrained(model_id, language=language, task=task)
+    # [수정] 인터넷 의존성 제거: local_files_only=True 추가
+    fe = WhisperFeatureExtractor.from_pretrained(model_id, local_files_only=True)
+    tk = WhisperTokenizer.from_pretrained(model_id, language=language, task=task, local_files_only=True)
+    
+    # 카운터 추가 및 로그 파일 직결
+    count = 0
+    from src.utils import logger
     
     for audio, transcription in zip(audio_list, transcription_list):
+        count += 1
+        if count % 10 == 0:  # 10개마다 로그 파일 및 심박계 파일에 기록
+             logger.info(f"[Data Loading] {count}/{len(audio_list)} samples processed... (Searching for resume point)")
+             # [긴급 확인용] 텍스트 파일에 직접 기록 (로그 설정 영향 안 받음)
+             with open("scratch/generator_heartbeat.txt", "a") as f:
+                 import datetime
+                 f.write(f"[{datetime.datetime.now()}] Data Loading: {count} samples processed\n")
+        
         sample = {"audio": audio, "transcription": transcription}
         processed = _pure_prepare_fn(sample, fe, tk)
         if processed:
@@ -125,7 +138,7 @@ def dataset_generator(audio_list, transcription_list, model_id, language, task):
 # ---------------------------------------------------------------------------- #
 
 @exception_guard(location="run_training()", reraise=True)
-def run_training() -> None:
+def run_training(resume_from_checkpoint: str = None) -> None:
     """
     전체 학습 파이프라인을 총괄하는 메인 함수입니다.
     데이터 준비부터 모델 로딩, LoRA 적용, 최종 학습 및 저장까지의 전 과정을 제어합니다.
@@ -152,7 +165,8 @@ def run_training() -> None:
     model = WhisperForConditionalGeneration.from_pretrained(
         model_id, 
         torch_dtype=torch.float32, 
-        low_cpu_mem_usage=False
+        low_cpu_mem_usage=False,
+        local_files_only=True
     )
     
     # 학습 시 불필요하게 디코딩을 간섭하는 설정들을 초기화하여 충돌을 방지합니다.
@@ -172,7 +186,6 @@ def run_training() -> None:
     # [Windows 최적화 핵심] 
     # 데이터를 한꺼번에 메모리에 올리지 않고 학습할 때 실시간으로 하나씩 읽어오는 방식을 채택합니다.
     # 이는 윈도우의 고질적인 'Memory Mapping' 오류를 원천 차단하는 가장 강력한 해결책입니다.
-    prepare_fn = _make_prepare_fn(processor.feature_extractor, processor.tokenizer)
     train_dataset = IterableDataset.from_generator(
         dataset_generator, 
         gen_kwargs={
@@ -212,11 +225,12 @@ def run_training() -> None:
         gradient_checkpointing      = False,                  # [Windows CPU] 안정성을 위해 비활성화
         fp16                        = False,                  # [Windows CPU] 반정밀도 연산 제외
         bf16                        = False,                  # [Windows CPU] bfloat16 제외
-        evaluation_strategy         = "no",                   # 검증 생략 (오직 학습에만 집중)
+        eval_strategy               = "no",                   # 검증 생략 (오직 학습에만 집중)
         save_steps                  = CFG["save_steps"],      # 모델 저장 주기
         save_total_limit            = 3,                      # 최근 3개의 체크포인트만 유지 (용량 관리)
         logging_steps               = CFG["logging_steps"],   # 로그 기록 주기
         report_to                   = "none",                 # 외부 연동 최소화
+        disable_tqdm                = True,                   # 터미널 로그 도배 방지
         dataloader_num_workers      = 0,                      # [Windows] 멀티프로세싱 충돌 방지 핵심
         dataloader_pin_memory       = False,                  # [Windows] WinError 87 방지 핵심
         remove_unused_columns       = False,                  # 데이터셋 컬럼 유실 방지
