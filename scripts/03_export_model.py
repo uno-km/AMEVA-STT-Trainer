@@ -10,6 +10,7 @@ scripts/03_export_model.py
 import sys
 import os
 import shutil
+import subprocess
 
 # 프로젝트 루트 디렉터리를 Python 경로에 등록하여 src 모듈을 불러올 수 있도록 설정
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -23,50 +24,101 @@ from rich.console            import Group
 
 
 def main():
-    with logger.dashboard_context():
-        logger.info("=" * 50)
-        logger.info("[3단계] 모델 내보내기 및 병합 시작")
-        logger.info("=" * 50)
+    try:
+        print("\n" + "=" * 50)
+        print("[3단계] 모델 내보내기 및 병합 시작")
+        print("=" * 50)
 
         # ---- 1단계: LoRA 가중치 병합 ----
-        logger.set_status("모델 병합 중", "LoRA 어댑터와 베이스 모델을 합치는 중...")
+        print("[*] 모델 병합 중: LoRA 어댑터와 베이스 모델을 합치는 중...")
         
         if not os.path.exists(LORA_DIR):
-            logger.error(f"LoRA 어댑터 없음: {LORA_DIR}")
+            print(f"❌ [Error] LoRA 어댑터 없음: {LORA_DIR}")
             return
 
         # 실제 병합 로직 실행
         merged_path = merge_and_save()
-        logger.success(f"병합 완료: {merged_path}")
+        print(f"✅ 병합 완료: {merged_path}")
 
-        # ---- 2단계: GGUF 가이드 패널 구성 ----
-        logger.set_status("완료", "최종 모델 생성 완료!")
+        # ---- 2단계: 변환 도구(whisper.cpp) 자가 진단 및 준비 ----
+        print("[*] 변환 도구 확인 중...")
         
-        guide_text = (
-            "[bold yellow][1] whisper.cpp 빌드[/]\n"
-            "   git clone https://github.com/ggerganov/whisper.cpp.git\n"
-            "   cd whisper.cpp && cmake -B build && cmake --build build --config Release\n\n"
-            "[bold yellow][2] GGUF 변환[/]\n"
-            f"   python whisper.cpp/models/convert-h5-to-gguf.py {merged_path} .\n\n"
-            "[bold yellow][3] 양자화 (선택)[/]\n"
-            "   ./build/bin/quantize ggml-model.bin ggml-model-q4_0.bin q4_0\n\n"
-            f"[bold cyan][DONE] 최종 파일 이동 -> {GGUF_DIR}[/]"
-        )
+        ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        third_party_dir = os.path.join(ROOT_DIR, "third_party")
+        whisper_cpp_dir = os.path.join(third_party_dir, "whisper.cpp")
+        converter_script = os.path.join(whisper_cpp_dir, "models", "convert-h5-to-ggml.py")
+
+        # 도구가 없으면 깃 클론 시도
+        if not os.path.exists(whisper_cpp_dir):
+            print("[!] whisper.cpp 도구가 없습니다. 자동으로 클론을 시작합니다...")
+            os.makedirs(third_party_dir, exist_ok=True)
+            subprocess.run([
+                "git", "clone", "--depth", "1", 
+                "https://github.com/ggerganov/whisper.cpp.git", 
+                whisper_cpp_dir
+            ], check=True)
+            print("✅ 도구 클론 완료!")
+
+        # ---- 3단계: GGUF(GGML) 변환 실행 ----
+        print("[*] GGUF 변환 중: 모델 포맷을 GGML로 변환하는 중... (수 분 소요)")
         
-        guide_panel = Panel(
-            guide_text,
-            title="[bold cyan]🚀 GGUF 변환 절차 가이드[/]",
-            border_style="bright_blue",
-            padding=(1, 2)
-        )
+        if not os.path.exists(converter_script):
+            print(f"❌ [Error] 변환 스크립트를 찾을 수 없습니다: {converter_script}")
+            return
+
+        # 변환 실행 (실시간 로그를 위해 capture_output 제거)
+        process = subprocess.run([
+            sys.executable, converter_script, 
+            merged_path, 
+            "." 
+        ])
         
-        # 대시보드 종료 후 가이드 출력
+        if process.returncode != 0:
+            print(f"❌ [Error] 변환 실패 (Exit Code: {process.returncode})")
+            return
+        
+        print("✅ GGUF 변환 완료!")
+
+        # ---- 4단계: 최종 모델 배포 ----
+        print("[*] 배포 중: 에이전트 모델 폴더로 이동 중...")
+        
+        source_bin = "ggml-model.bin"
+        target_name = "ggml-shuka-tiny.bin"
+        final_dest = os.path.join(GGUF_DIR, target_name)
+        
+        os.makedirs(GGUF_DIR, exist_ok=True)
+        
+        if os.path.exists(source_bin):
+            if os.path.exists(final_dest):
+                os.remove(final_dest)
+            shutil.move(source_bin, final_dest)
+            print(f"✅ 최종 모델 배포 완료: {final_dest}")
+        else:
+            print("❌ [Error] 변환된 .bin 파일을 찾을 수 없습니다.")
+            return
+
+        # ---- 5단계: 완료 안내 패널 ----
+        print("\n" + "="*50)
+        print("🎉 [SUCCESS] 슈카 AI 모델 탄생!")
+        print(f"📍 위치: {final_dest}")
+        print("🚀 AMEVA-STT-Agent에서 '기타 모델 선택'으로 불러오세요.")
+        print("="*50 + "\n")
+
+    except Exception as e:
+        print("\n" + "!"*60)
+        print(f"❌ [CRITICAL ERROR] {str(e)}")
+        import traceback
+        traceback.print_exc()
+        print("!"*60 + "\n")
+
+    except Exception as e:
+        # 대시보드가 켜져있다면 끄고 에러 출력
         logger.stop_dashboard()
-        print("\n")
-        logger.console.print(guide_panel)
-        print("\n")
-        
-        logger.info("[3단계] 모든 프로세스 종료")
+        print("\n" + "!"*60)
+        print(f"❌ [CRITICAL ERROR] {str(e)}")
+        import traceback
+        traceback.print_exc()
+        print("!"*60 + "\n")
 
 
 if __name__ == "__main__":

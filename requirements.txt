@@ -25,3 +25,7 @@ huggingface-hub
 rich
 psutil
 win10toast
+
+# GGUF Conversion
+sentencepiece
+numpy

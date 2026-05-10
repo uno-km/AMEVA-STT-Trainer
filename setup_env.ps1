@@ -12,5 +12,20 @@ python -m pip install --upgrade pip
 Write-Host "Installing dependencies from requirements.txt..." -ForegroundColor Cyan
 pip install -r requirements.txt
 
+# --- whisper.cpp 변환 도구 세팅 ---
+$ThirdPartyDir = "third_party"
+$WhisperCppDir = "$ThirdPartyDir/whisper.cpp"
+
+if (-not (Test-Path $ThirdPartyDir)) {
+    New-Item -ItemType Directory -Path $ThirdPartyDir | Out-Null
+}
+
+if (-not (Test-Path $WhisperCppDir)) {
+    Write-Host "Cloning whisper.cpp for conversion tools..." -ForegroundColor Cyan
+    git clone --depth 1 https://github.com/ggerganov/whisper.cpp.git $WhisperCppDir
+} else {
+    Write-Host "whisper.cpp already exists in $WhisperCppDir" -ForegroundColor Gray
+}
+
 Write-Host "Setup Complete!" -ForegroundColor Green
 Write-Host "To activate the environment in the future, run: .\venv\Scripts\Activate.ps1" -ForegroundColor Yellow

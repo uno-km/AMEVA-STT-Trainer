@@ -7,7 +7,7 @@ import psutil
 from datetime import datetime
 from rich.console import Console
 from rich.live import Live
-from win10toast import ToastNotifier
+# from win10toast import ToastNotifier
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
@@ -77,13 +77,11 @@ def create_status_layout():
         padding=(0, 1)
     )
 
-_notifier = ToastNotifier()
+# from win10toast import ToastNotifier  # 안정성 문제로 비활성화
 
 def notify_windows(title: str, message: str, duration: int = 5):
-    """윈도우 시스템 트레이 알림을 띄운다."""
-    try:
-        _notifier.show_toast(title, message, duration=duration, threaded=True)
-    except: pass
+    """윈도우 알림 기능을 비활성화함 (시스템 안정성 우선)"""
+    pass
 
 def _write_to_file(level: str, message: str):
     os.makedirs(LOG_DIR, exist_ok=True)
