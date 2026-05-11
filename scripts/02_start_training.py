@@ -92,11 +92,27 @@ def main():
         logger.warning("사용자가 학습을 취소했습니다.")
         return
 
-    # 2. 학습 실행
+    # 2. WandB 초기화 (설정된 경우)
+    if CFG["wandb"]["enabled"]:
+        import wandb
+        os.environ["WANDB_PROJECT"] = CFG["wandb"]["project"]
+        os.environ["WANDB_MODE"] = CFG["wandb"]["mode"]
+        wandb.init(
+            project=CFG["wandb"]["project"],
+            config=CFG,
+            name=f"Roadmap-{CFG['model_id'].split('/')[-1]}-Step{CFG['max_steps']}"
+        )
+        logger.info(f"[WandB] '{CFG['wandb']['project']}' 프로젝트로 로그 전송 시작 (Mode: {CFG['wandb']['mode']})")
+
+    # 3. 학습 실행
     try:
         run_training(resume_from_checkpoint=args.resume_from_checkpoint)
     except Exception as e:
         logger.error(f"학습 도중 오류 발생: {e}")
+    finally:
+        if CFG["wandb"]["enabled"]:
+            import wandb
+            wandb.finish()
 
 if __name__ == "__main__":
     main()

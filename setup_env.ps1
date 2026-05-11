@@ -12,6 +12,9 @@ python -m pip install --upgrade pip
 Write-Host "Installing dependencies from requirements.txt..." -ForegroundColor Cyan
 pip install -r requirements.txt
 
+Write-Host "Verifying WandB installation..." -ForegroundColor Cyan
+python -c "import wandb; print(f'WandB Version: {wandb.__version__}')"
+
 # --- whisper.cpp 변환 도구 세팅 ---
 $ThirdPartyDir = "third_party"
 $WhisperCppDir = "$ThirdPartyDir/whisper.cpp"

@@ -25,6 +25,7 @@ huggingface-hub
 rich
 psutil
 win10toast
+wandb
 
 # GGUF Conversion
 sentencepiece

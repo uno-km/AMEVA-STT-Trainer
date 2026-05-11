@@ -111,6 +111,7 @@ pip install -r requirements.txt
 - **모니터링 및 시각화 (Telemetry & UI)**
     - `rich`: 터미널 내 실시간 RGB 대시보드와 진척도 시각화를 통해 사용자 경험(UX) 극대화.
     - `psutil`: 시스템 자원(CPU, RAM) 상태를 커널 레벨에서 감시하여 대시보드에 실시간 전송.
+    - `wandb`: 학습 손실(Loss), 하드웨어 메트릭 및 실험 로드맵의 단계별 성과를 클라우드/오프라인 대시보드에 기록.
 
 - **검증 및 성능 평가 (Metric Validation)**
     - `evaluate` & `jiwer`: STT 성능 측정의 표준인 WER(단어 오차율) 및 CER(음절 오차율)을 과학적으로 산출하기 위한 수학적 알고리즘 라이브러리.

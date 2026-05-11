@@ -65,6 +65,14 @@ DEFAULTS = {
 
     # 평가
     "eval_samples"           : 50,           # 평가 시 무작위 추출 샘플 수
+
+    # WandB
+    "wandb": {
+        "enabled"       : True,
+        "project"       : "AMEVA-STT-Trainer",
+        "mode"          : "online",
+        "log_artifacts" : True,
+    }
 }
 
 

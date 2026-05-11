@@ -28,3 +28,10 @@ lora_dropout: 0.05
 
 # ---- 평가 ----
 eval_samples: 50
+
+# ---- WandB (Weights & Biases) ----
+wandb:
+  enabled: true
+  project: "AMEVA-STT-Trainer"
+  mode: "online"  # "online" or "offline" (offline 시 wandb sync 필요)
+  log_artifacts: true
