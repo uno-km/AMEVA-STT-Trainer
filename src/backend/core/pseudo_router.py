@@ -25,18 +25,37 @@ class PseudoRouter:
 
     def request(self, method: str, path: str, body: dict = None) -> dict:
         """프론트엔드에서 호출하는 가상 HTTP Request 메서드"""
-        handler = self._routes.get((path, method.upper()))
+        # 쿼리 스트링 분리 (예: /api/v1/tasks/report?task_id=123)
+        query_params = {}
+        clean_path = path
+        if "?" in path:
+            clean_path, query_str = path.split("?", 1)
+            for pair in query_str.split("&"):
+                if "=" in pair:
+                    k, v = pair.split("=", 1)
+                    query_params[k] = v
+
+        handler = self._routes.get((clean_path, method.upper()))
         if not handler:
             return {"status": 404, "error": f"Route not found: {method} {path}"}
         
         try:
             if method.upper() == 'POST':
+                # POST는 body와 query_params를 함께 전달할 수 있음
                 response = handler(body or {})
             else:
-                response = handler()
+                # GET은 URL 파라미터들을 함수의 인자로 전달
+                import inspect
+                sig = inspect.signature(handler)
+                if query_params and len(sig.parameters) > 0:
+                    # 함수가 인자를 받는 경우만 전달
+                    response = handler(**query_params)
+                else:
+                    response = handler()
                 
             return {"status": 200, "data": response}
         except Exception as e:
+            import traceback
             error_trace = traceback.format_exc()
             print(f"[Router Error] {error_trace}")
             return {"status": 500, "error": str(e), "trace": error_trace}

@@ -123,7 +123,8 @@ class ReportWindow(QMainWindow):
     """태스크의 모든 정보(정보, 로그, 파일)를 한눈에 보여주는 보고서 창"""
     def __init__(self, report_data):
         super().__init__()
-        self.setWindowTitle(f"Task Report: {report_data['task_info']['name']}")
+        task_name = report_data['task_info'].get('tsk_nm', 'Unknown Task')
+        self.setWindowTitle(f"Task Report: {task_name}")
         self.resize(1000, 800)
         self.setStyleSheet("background-color: #11111b; color: #cdd6f4;")
         
@@ -132,7 +133,7 @@ class ReportWindow(QMainWindow):
         layout = QVBoxLayout(central)
         
         # Header
-        title = QLabel(f"📄 {report_data['task_info']['name']} 상세 리포트")
+        title = QLabel(f"📄 {task_name} 상세 리포트")
         title.setFont(QFont("Arial", 20, QFont.Weight.Bold))
         title.setStyleSheet("color: #89b4fa; padding: 10px;")
         layout.addWidget(title)
@@ -140,8 +141,25 @@ class ReportWindow(QMainWindow):
         info_frame = QFrame()
         info_frame.setStyleSheet("background-color: #181825; border-radius: 10px; padding: 15px;")
         info_layout = QVBoxLayout(info_frame)
+        
         info_layout.addWidget(QLabel(f"Task ID (UUID): {report_data['task_info']['id']}"))
         info_layout.addWidget(QLabel(f"생성 일시: {report_data['task_info']['create_dt']}"))
+        
+        # Step Status 표시
+        step = report_data['task_info'].get('step_lv', 1)
+        stts = report_data['task_info'].get('step_stts', 'UNKNOWN')
+        stts_color = "#a6e3a1" if stts == "SUCCESS" else "#f9e2af" if stts == "RUNNING" else "#f38ba8"
+        
+        status_label = QLabel(f"현재 단계: Step {step} | 상태: {stts}")
+        status_label.setStyleSheet(f"color: {stts_color}; font-weight: bold; font-size: 14px;")
+        info_layout.addWidget(status_label)
+        
+        # Restart 버튼 추가
+        self.restart_btn = QPushButton(f"🔄 이 설정으로 재학습 시작 (새 버전 생성)")
+        self.restart_btn.clicked.connect(lambda: self.trigger_restart(report_data['task_info']['id']))
+        self.restart_btn.setStyleSheet("background-color: #89b4fa; color: #11111b; padding: 10px; font-weight: bold;")
+        info_layout.addWidget(self.restart_btn)
+        
         layout.addWidget(info_frame)
         
         # Tabs for details
@@ -181,6 +199,13 @@ class ReportWindow(QMainWindow):
         close_btn.clicked.connect(self.close)
         close_btn.setStyleSheet("background-color: #313244; padding: 10px;")
         layout.addWidget(close_btn)
+
+    def trigger_restart(self, task_id):
+        # API를 통해 새 버전 태스크 생성 요청
+        response = api_client.post("/api/v1/tasks/restart", {"task_id": task_id})
+        if response:
+            QMessageBox.information(self, "재시작", f"새로운 버전의 태스크가 생성되었습니다: {response['name']}\n이제 메인 화면에서 학습을 이어가세요.")
+            self.close()
 
 class DashboardWindow(QMainWindow):
     def __init__(self):

@@ -75,6 +75,7 @@ def create_task(body: dict):
     
     # 1. DB에 태스크 생성
     task_id = db_manager.create_task(name)
+    db_manager.update_task_status(task_id, 1, "RUNNING", "Task created and starting step 1.")
     
     # 2. 물리적 폴더 생성 (UUID 기반)
     base_dir = r"c:\ameva\AMEVA-STT-Trainer"
@@ -83,6 +84,20 @@ def create_task(body: dict):
     
     pipeline_state.current_task_name = task_id
     return {"id": task_id, "name": name, "path": task_folder}
+
+@router.post("/api/v1/tasks/restart")
+def restart_task(body: dict):
+    from src.backend.core.database import db_manager
+    base_task_id = body.get("task_id")
+    if not base_task_id: return {"error": "Missing base_task_id"}
+    
+    # 새 버전 태스크 생성 (예: 2_태스크명)
+    new_task_id = db_manager.create_next_version_task(base_task_id)
+    task_info = db_manager.get_task_details(new_task_id)
+    
+    db_manager.update_task_status(new_task_id, 1, "RUNNING", f"Restarted from {base_task_id}")
+    pipeline_state.current_task_name = new_task_id
+    return {"id": new_task_id, "name": task_info['tsk_nm']}
 
 @router.get("/api/v1/tasks/report")
 def get_task_report(task_id: str = None):

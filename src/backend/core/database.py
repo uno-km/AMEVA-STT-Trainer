@@ -19,16 +19,21 @@ class DatabaseManager:
         with self.get_connection() as conn:
             cursor = conn.cursor()
             
-            # Task 테이블 생성
+            # Task 테이블 생성 (스텝 및 상태 정보 추가)
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS tb_task (
                     id TEXT PRIMARY KEY,
                     tsk_nm TEXT NOT NULL,
-                    create_dt TEXT NOT NULL
+                    create_dt TEXT NOT NULL,
+                    step_lv INTEGER DEFAULT 1,
+                    step_stts TEXT DEFAULT 'RUNNING',
+                    stts_dt TEXT,
+                    log_id INTEGER,
+                    FOREIGN KEY (log_id) REFERENCES tb_log (log_id)
                 )
             ''')
             
-            # Metadata 매핑 테이블 생성 (시퀀스는 1000001부터 시작)
+            # Metadata 매핑 테이블 생성
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS tb_metadata (
                     meta_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -89,6 +94,39 @@ class DatabaseManager:
                 # 통합 로그 (최신 순으로 가져와서 표시 시엔 정렬 고려)
                 cursor.execute('SELECT * FROM tb_log ORDER BY create_dt ASC LIMIT ?', (limit,))
             return [dict(row) for row in cursor.fetchall()]
+
+    def update_task_status(self, task_id: str, step_lv: int, step_stts: str, log_msg: str = None):
+        """태스크의 현재 단계와 상태를 업데이트하고 로그를 남깁니다."""
+        stts_dt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        log_id = None
+        if log_msg:
+            log_id = self.add_log(step_stts, log_msg, task_id)
+            
+        with self.get_connection() as conn:
+            conn.execute('''
+                UPDATE tb_task 
+                SET step_lv = ?, step_stts = ?, stts_dt = ?, log_id = ?
+                WHERE id = ?
+            ''', (step_lv, step_stts, stts_dt, log_id, task_id))
+            conn.commit()
+
+    def create_next_version_task(self, base_task_id: str) -> str:
+        """기존 태스크의 이름을 유지하며 버전을 올려 새 태스크를 생성합니다 (예: 슈카 -> 2_슈카)."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT tsk_nm FROM tb_task WHERE id = ?', (base_task_id,))
+            row = cursor.fetchone()
+            if not row: return self.create_task("Unknown_Task")
+            
+            old_name = row['tsk_nm']
+            # 버전 번호 추출 및 증가 (예: "2_슈카" -> 3)
+            if "_" in old_name and old_name.split("_")[0].isdigit():
+                version = int(old_name.split("_")[0]) + 1
+                new_name = f"{version}_{'_'.join(old_name.split('_')[1:])}"
+            else:
+                new_name = f"2_{old_name}"
+                
+            return self.create_task(new_name)
 
     def create_task(self, tsk_nm: str) -> str:
         task_id = str(uuid.uuid4())
