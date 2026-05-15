@@ -7,20 +7,17 @@ class PipelineState:
     def __init__(self):
         self.current_task_name = "AMEVA STT Engine"
         self.current_stage = "IDLE" # IDLE, PREPROCESSING, TRAINING, EVALUATION
-        self.logs = []
         
     def add_log(self, level, message):
-        self.logs.append({"level": level, "message": message})
-        # Keep last 1000 logs
-        if len(self.logs) > 1000:
-            self.logs = self.logs[-1000:]
+        from src.backend.core.database import db_manager
+        # task_id가 현재 잡혀있으면 태스크 종속 로그로, 아니면 통합 로그로 저장
+        tid = self.current_task_name if self.current_task_name != "AMEVA STT Engine" else None
+        db_manager.add_log(level, message, tid)
 
 pipeline_state = PipelineState()
 
-# Mock initial logs
-pipeline_state.add_log("INFO", "Initializing AMEVA-STT-Trainer Pipeline...")
-pipeline_state.add_log("INFO", "Loaded LoRA config: r=8, lora_alpha=32")
-pipeline_state.add_log("INFO", "Started training step 1...")
+# Mock initial logs (now inserts into DB if not exists)
+pipeline_state.add_log("INFO", "Initializing AMEVA-STT-Trainer Pipeline with SQLite DB...")
 
 @router.get("/api/v1/pipeline/status")
 def get_pipeline_status():
@@ -31,7 +28,10 @@ def get_pipeline_status():
 
 @router.get("/api/v1/pipeline/logs")
 def get_pipeline_logs():
-    return {"logs": pipeline_state.logs}
+    from src.backend.core.database import db_manager
+    # 현재 상태에 상관없이 통합 로그 전체를 가져옵니다. 
+    # (원한다면 현재 task_id로만 가져올 수도 있습니다)
+    return {"logs": db_manager.get_logs(limit=100)}
 
 def scan_directory(base_path):
     """지정된 경로의 모든 하위 파일 목록을 재귀적으로 반환합니다."""
@@ -65,27 +65,39 @@ def get_past_records():
 
 @router.get("/api/v1/tasks/list")
 def list_tasks():
-    return {"tasks": task_manager.list_tasks()}
+    from src.backend.core.database import db_manager
+    return {"tasks": db_manager.get_all_tasks()}
 
 @router.post("/api/v1/tasks/create")
 def create_task(body: dict):
+    from src.backend.core.database import db_manager
     name = body.get("name", "Unnamed Task")
-    task = task_manager.create_task(name)
-    pipeline_state.current_task_name = task["id"]
-    return task
+    
+    # 1. DB에 태스크 생성
+    task_id = db_manager.create_task(name)
+    
+    # 2. 물리적 폴더 생성 (UUID 기반)
+    base_dir = r"c:\ameva\AMEVA-STT-Trainer"
+    task_folder = os.path.join(base_dir, "dataset", f"{name}_{task_id}")
+    os.makedirs(task_folder, exist_ok=True)
+    
+    pipeline_state.current_task_name = task_id
+    return {"id": task_id, "name": name, "path": task_folder}
 
 @router.get("/api/v1/tasks/report")
 def get_task_report(task_id: str = None):
-    # 만약 task_id가 없으면 현재 task 사용
+    from src.backend.core.database import db_manager
     tid = task_id or pipeline_state.current_task_name
-    task = task_manager.get_task(tid)
-    if not task: return {"error": "Task not found"}
+    task_details = db_manager.get_task_details(tid)
     
-    # 보고서용 상세 정보 수집
+    if not task_details: 
+        return {"error": "Task not found"}
+    
+    # 보고서 구조 생성
     report = {
-        "task_info": task,
-        "logs": pipeline_state.logs, # 실무에선 파일로그를 읽어야 함
-        "files": scan_directory(task["path"])
+        "task_info": task_details,
+        "logs": db_manager.get_logs(task_id=tid, limit=1000),
+        "files": [] # DB 기반 리포팅으로 변경됨
     }
     return report
 

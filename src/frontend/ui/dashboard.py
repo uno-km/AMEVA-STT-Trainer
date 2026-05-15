@@ -140,9 +140,8 @@ class ReportWindow(QMainWindow):
         info_frame = QFrame()
         info_frame.setStyleSheet("background-color: #181825; border-radius: 10px; padding: 15px;")
         info_layout = QVBoxLayout(info_frame)
-        info_layout.addWidget(QLabel(f"ID: {report_data['task_info']['id']}"))
-        info_layout.addWidget(QLabel(f"생성 일시: {report_data['task_info']['created_at']}"))
-        info_layout.addWidget(QLabel(f"저장 경로: {report_data['task_info']['path']}"))
+        info_layout.addWidget(QLabel(f"Task ID (UUID): {report_data['task_info']['id']}"))
+        info_layout.addWidget(QLabel(f"생성 일시: {report_data['task_info']['create_dt']}"))
         layout.addWidget(info_frame)
         
         # Tabs for details
@@ -157,16 +156,24 @@ class ReportWindow(QMainWindow):
             log_view.append(f"[{log['level']}] {log['message']}")
         tabs.addTab(log_view, "전체 로그")
         
-        # Files tab
-        file_list = QTreeWidget()
-        file_list.setHeaderLabel("관련 파일 리스트")
-        def populate(parent, items):
-            for item in items:
-                child = QTreeWidgetItem(parent, [item["name"]])
-                if item.get("is_dir"):
-                    populate(child, item.get("children", []))
-        populate(file_list, report_data.get("files", []))
-        tabs.addTab(file_list, "데이터/결과 파일")
+        # DB DB Metadata & Chunks tab
+        db_tree = QTreeWidget()
+        db_tree.setHeaderLabels(["데이터", "경로/스크립트"])
+        db_tree.setColumnWidth(0, 300)
+        
+        metadatas = report_data['task_info'].get('metadatas', [])
+        for meta in metadatas:
+            meta_item = QTreeWidgetItem(db_tree, [f"Meta [{meta['meta_id']}]: {meta['file_name']}", meta['folder_path']])
+            meta_item.setForeground(0, QColor("#89b4fa"))
+            
+            for chunk in meta.get('chunks', []):
+                chunk_text = f"[{chunk['chunk_id']}] {chunk['chunk_name']}"
+                script_text = chunk.get('script') or ""
+                chunk_item = QTreeWidgetItem(meta_item, [chunk_text, script_text])
+                chunk_item.setForeground(0, QColor("#a6e3a1"))
+        
+        db_tree.expandAll()
+        tabs.addTab(db_tree, "DB 매핑 데이터 (Meta ↔ Chunks)")
         
         layout.addWidget(tabs)
         
@@ -590,16 +597,14 @@ class DashboardWindow(QMainWindow):
                 QMessageBox.information(self, "기록 없음", "저장된 태스크 기록이 없습니다.")
                 return
                 
-            # 간단한 선택 다이얼로그 (실무에선 전용 위젯 권장)
             from PyQt6.QtWidgets import QInputDialog
-            task_names = [f"{t['name']} ({t['timestamp']})" for t in tasks]
+            task_names = [f"{t['tsk_nm']} ({t['create_dt']})" for t in tasks]
             item, ok = QInputDialog.getItem(self, "과거 태스크 선택", "불러올 태스크를 선택하세요:", task_names, 0, False)
             
             if ok and item:
                 selected_idx = task_names.index(item)
                 selected_task = tasks[selected_idx]
                 
-                # 리포트 데이터 가져오기
                 report_data = api_client.get(f"/api/v1/tasks/report?task_id={selected_task['id']}")
                 if report_data and "error" not in report_data:
                     self.report_win = ReportWindow(report_data)
@@ -611,9 +616,13 @@ class DashboardWindow(QMainWindow):
 
     def on_slider_change(self, value):
         self.slider_val_label.setText(str(value))
-        if value > self.total_cores * 0.8:
+        # 90% 이상일 때만 빨간색 경고 (80%는 주황색 느낌으로 변경 가능하나 일단 90%로 완화)
+        if value >= self.total_cores * 0.9:
             self.slider.setStyleSheet("QSlider::handle:horizontal { background-color: #f38ba8; border-radius: 7px; }")
-            self.slider_val_label.setStyleSheet("color: #f38ba8;")
+            self.slider_val_label.setStyleSheet("color: #f38ba8; font-weight: bold;")
+        elif value >= self.total_cores * 0.7:
+            self.slider.setStyleSheet("QSlider::handle:horizontal { background-color: #f9e2af; border-radius: 7px; }")
+            self.slider_val_label.setStyleSheet("color: #f9e2af;")
         else:
             self.slider.setStyleSheet("")
             self.slider_val_label.setStyleSheet("color: #cdd6f4;")

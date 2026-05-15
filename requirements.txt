@@ -30,5 +30,7 @@ wandb
 # GGUF Conversion
 sentencepiece
 numpy
+# Database (Built-in SQLite used for Task/Log management)
+# sqlite3
 PyQt6
 

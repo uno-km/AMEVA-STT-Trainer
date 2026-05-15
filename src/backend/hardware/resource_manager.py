@@ -17,13 +17,15 @@ class HardwareManager:
             self.allocated_cores = self.total_cores
 
     def check_internet(self) -> bool:
-        """인터넷 연결 상태 확인 (8.8.8.8로의 소켓 연결 테스트)"""
-        try:
-            socket.setdefaulttimeout(1)
-            socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect(("8.8.8.8", 53))
-            return True
-        except socket.error:
-            return False
+        """인터넷 연결 상태 확인 (8.8.8.8 및 1.1.1.1 시도)"""
+        for target in ["8.8.8.8", "1.1.1.1"]:
+            try:
+                socket.setdefaulttimeout(1)
+                socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect((target, 53))
+                return True
+            except socket.error:
+                continue
+        return False
 
     def get_system_status(self) -> dict:
         """현재 시스템의 실시간 상태를 반환합니다."""

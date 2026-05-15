@@ -83,27 +83,31 @@ def notify_windows(title: str, message: str, duration: int = 5):
     """윈도우 알림 기능을 비활성화함 (시스템 안정성 우선)"""
     pass
 
-def _write_to_file(level: str, message: str):
-    os.makedirs(LOG_DIR, exist_ok=True)
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    with open(RUN_LOG_PATH, "a", encoding="utf-8") as f:
-        f.write(f"[{ts}] [{level}] {message}\n")
+def _write_to_db(level: str, message: str):
+    """파일 대신 SQLite DB에 로그를 영구 기록합니다."""
+    try:
+        from src.backend.core.database import db_manager
+        # 현재 실행 중인 태스크가 있다면 해당 ID로 기록 (글로벌 상태에서 가져올 수도 있음)
+        db_manager.add_log(level, message)
+    except Exception:
+        # DB 오류 시 fallback으로 콘솔에만 출력
+        pass
 
 def info(message: str):
-    _write_to_file("INFO", message)
+    _write_to_db("INFO", message)
     if not state.is_dashboard_active:
         console.print(f"[bold blue]INFO[/] {message}")
     elif "완료" in message or "생성" in message:
         set_status(sub_task=message)
 
 def error(message: str):
-    _write_to_file("ERROR", message)
+    _write_to_db("ERROR", message)
     if not state.is_dashboard_active:
         console.print(f"[bold red]ERR [/] {message}")
     notify_windows("⚠️ AMEVA-STT 오류", message[:100])
 
 def success(message: str):
-    _write_to_file("SUCCESS", message)
+    _write_to_db("SUCCESS", message)
     if not state.is_dashboard_active:
         console.print(f"[bold green]OK  [/] {message}")
     notify_windows("✅ AMEVA-STT 완료", message[:100])
