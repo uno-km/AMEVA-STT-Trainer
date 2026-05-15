@@ -26,7 +26,8 @@ def load_base_model():
     logger.info(f"베이스 모델 로딩: {model_id}")
 
     # HuggingFace Hub 에서 사전 학습된 Whisper 모델 가중치 로드
-    model = WhisperForConditionalGeneration.from_pretrained(model_id)
+    # [수정] 오프라인 환경 지원을 위해 로컬 파일 우선 로드 설정
+    model = WhisperForConditionalGeneration.from_pretrained(model_id, local_files_only=True)
     # 학습 시 불필요한 강제 디코더 토큰 비활성화
     # (없애지 않으면 학습 시 토큰 ID 충돌 발생 가능)
     model.config.forced_decoder_ids = None
@@ -37,6 +38,7 @@ def load_base_model():
         model_id,
         language=CFG["language"],
         task=CFG["task"],
+        local_files_only=True
     )
     return model, processor
 
@@ -76,14 +78,14 @@ def load_for_inference():
     # 설정에서 모델 식별자 로드
     model_id = CFG["model_id"]
     # 베이스 모델을 HuggingFace 에서 로드
-    model    = WhisperForConditionalGeneration.from_pretrained(model_id)
+    model    = WhisperForConditionalGeneration.from_pretrained(model_id, local_files_only=True)
     # 저장된 LoRA 어댑터를 베이스 모델 위에 얹기
     model    = PeftModel.from_pretrained(model, LORA_DIR)
     # 추론 전용 모드 설정 (드롭아웃 비활성화, 배치 정규화 고정)
     model.eval()
 
     # 추론에 사용할 프로세서 로드 (자막 디코딩 및 오디오 특징 추출)
-    processor = WhisperProcessor.from_pretrained(model_id, language=CFG["language"], task=CFG["task"])
+    processor = WhisperProcessor.from_pretrained(model_id, language=CFG["language"], task=CFG["task"], local_files_only=True)
     return model, processor
 
 
@@ -98,7 +100,7 @@ def merge_and_save():
     logger.info("LoRA 병합 시작...")
 
     # 병합 작업을 위해 베이스 모델을 새로 로드 (기존 메모리와 독립)
-    base_model = WhisperForConditionalGeneration.from_pretrained(model_id)
+    base_model = WhisperForConditionalGeneration.from_pretrained(model_id, local_files_only=True)
     # 저장된 LoRA 어댑터를 베이스 모델 위에 로드
     peft_model = PeftModel.from_pretrained(base_model, LORA_DIR)
 
@@ -112,7 +114,7 @@ def merge_and_save():
     merged.save_pretrained(MERGED_DIR)
 
     # 프로세서도 같은 디렉터리에 저장 (추론 시 함께 필요)
-    processor = WhisperProcessor.from_pretrained(model_id)
+    processor = WhisperProcessor.from_pretrained(model_id, local_files_only=True)
     processor.save_pretrained(MERGED_DIR)
     # whisper.cpp 변환 스크립트가 요구하는 vocab.json 파일을 강제로 생성
     processor.tokenizer.save_vocabulary(MERGED_DIR)
