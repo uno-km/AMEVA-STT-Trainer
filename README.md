@@ -188,8 +188,11 @@ Whisper 모델 위에 특정 도메인 지식을 주입하는 파인튜닝 과�
     - **전략**: VTT 자막의 경계를 인식하여 발화 중간 절단을 방지하고, 15~30s 사이에서 유동적으로 그룹화 수행.
     - **특징**: 문맥적 완결성을 확보하여 모델의 언어 모델링 성능 향상을 유도함.
 - **Lv.3 (Skilled) - Hybrid Precision Alignment**: 
-    - **전략**: VAD(Voice Activity Detection)를 통한 무음 구간 탐지와 형태소 분석을 결합하여 인간의 호흡 단위로 데이터를 정밀 분할.
-    - **특징**: 오디오-텍스트 간의 시계열 무결성을 극대화하여 가장 높은 전사 정확도(CER)를 목표로 함.
+    - **Relational MLOps Database**: SQLite를 내장하여 태스크(Task), 메타데이터, 청크 파일, 시스템 로그를 유기적으로 연결하고 이전 학습 기록을 완벽하게 관리/재시작합니다.
+    - **Professional Dashboard UI**: PyQt6 기반의 4분할 관제 대시보드(Loss, CPU, Speed, Metric)와 "Focus Mode"를 통해 실시간 모니터링을 제공합니다.
+    - **Smart Data Pipeline**: 장시간의 유튜브 오디오나 대용량 음성 파일을 VAD(Voice Activity Detection) 기반으로 정밀하게 분할(`Smart Chunking`)합니다.
+    - **Resource Management**: 실시간 CPU 코어 할당 슬라이더와 OOM(Out of Memory) 방지를 위한 자동 배치 사이즈 조절 및 체크포인트 백업을 지원합니다.
+    - **Data Integrity Validation**: 학습 전 `metadata.csv`와 실제 `.wav` 파일 간의 무결성을 검증하고 손상된 데이터를 자동 격리합니다." - AMEVA STT Project
 
 ---
 **Note**: 본 시스템은 CPU 환경에서도 안정적으로 동작하도록 설계되었으나, 학습 효율을 위해 최신 NVIDIA GPU 환경(CUDA) 사용을 권장한다.
