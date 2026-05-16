@@ -78,9 +78,16 @@ class DashboardWindow(QMainWindow):
         left_layout.setSpacing(5)
         
         self.wizard = WizardPanel(self.ctx)
-        self.wizard.btn_goto_load.clicked.connect(self.sync_task_list)
-        self.wizard.btn_start.clicked.connect(self.start_training)
+        self.wizard.btn_load.clicked.connect(self.sync_task_list)
+        self.wizard.btn_manual.clicked.connect(self.sync_task_list)
+        
+        # SOP 단계별 버튼 연결
+        self.wizard.btn_s1_start.clicked.connect(lambda: self.start_pipeline_from_sop(step=1))
+        self.wizard.btn_s2_start.clicked.connect(lambda: self.start_pipeline_from_sop(step=2))
+        self.wizard.btn_s3_start.clicked.connect(lambda: self.start_pipeline_from_sop(step=3))
+        
         self.wizard.btn_load_confirm.clicked.connect(self.load_selected_report)
+        self.wizard.btn_export_run.clicked.connect(self.run_export_pipeline)
         left_layout.addWidget(self.wizard, 0)
         
         self.explorer = ExplorerPanel(self.ctx)
@@ -205,28 +212,139 @@ class DashboardWindow(QMainWindow):
             self.tabs.addTab(viewer, os.path.basename(path))
             self.tabs.setCurrentWidget(viewer)
 
-    def start_training(self):
-        name = self.wizard.get_task_name()
-        res = self.ctx.api.post("/api/v1/tasks/create", {"name": name})
-        if res:
-            QMessageBox.information(self, "성공", f"태스크 [{name}] 생성 완료!")
+    def start_pipeline_from_sop(self, step=1):
+        """SOP 위저드 단계에 따라 파이프라인을 가동함 (1~step 단계까지)"""
+        name = self.wizard.task_name_edit.text().strip()
+        
+        # 이어하기 중인지 확인
+        task_id = getattr(self, 'current_resume_task_id', None)
+        
+        if not task_id:
+            # --- [신규 태스크 생성 모드] ---
+            if not name:
+                QMessageBox.warning(self, "경고", "태스크 이름을 입력해주세요.")
+                self.wizard.stack.setCurrentIndex(1)
+                return
+            
+            url = self.wizard.task_url_edit.text().strip()
+            count = self.wizard.task_count_spin.value()
+            
+            payload_init = {"name": name, "source_type": "youtube", "url": url, "count": count}
+            res = self.ctx.api.post("/api/v1/tasks/init_data", payload_init)
+            if not res or "id" not in res:
+                QMessageBox.critical(self, "오류", "태스크 생성에 실패했습니다.")
+                return
+            task_id = res["id"]
+        
+        # --- [공통: 다음 단계 예약 및 실행] ---
+        # 사용자가 현재 SOP 단계에서 '시작'을 눌렀으므로 그에 맞는 레벨까지 예약
+        if step >= 2:
+            max_steps = self.wizard.max_steps_spin.value()
+            auto_export = (step >= 3)
+            method = self.wizard.auto_method_cb.currentText()
+            
+            payload_train = {"task_id": task_id, "max_steps": max_steps, "auto_export": auto_export, "method": method}
+            self.ctx.api.post("/api/v1/tasks/start_train", payload_train)
+
+        # 초기화 및 안내
+        self.wizard.stack.setCurrentIndex(6) # 모니터링 화면으로 워프!
+        self.wizard.update_monitor(name, 1, "RUNNING") # 초기 상태 표시
+        self.current_resume_task_id = None
+        self.sync_task_list()
 
     def sync_task_list(self):
         res = self.ctx.api.get("/api/v1/tasks/list")
         if res and "tasks" in res:
             self.wizard.task_list_cb.clear()
-            for t in res["tasks"]:
-                # 콤보박스에 이름 표시, 실제 ID는 데이터로 저장
-                self.wizard.task_list_cb.addItem(f"{t['tsk_nm']} ({t['create_dt']})", t['id'])
+            self.wizard.export_task_cb.clear()
+            
+            sorted_tasks = sorted(res["tasks"], key=lambda x: x.get('report_path') is None)
+            
+            for t in sorted_tasks:
+                level = t.get('level', 1)
+                status = t.get('status', 'RUNNING')
+                
+                icon = "📄 " if t.get('report_path') else ""
+                if status == "SUCCESS":
+                    if level == 3: state_txt = "[완료]"
+                    elif level == 1: state_txt = "[1단계 완료] 🚀이어하기"
+                    elif level == 2: state_txt = "[2단계 완료] 📦최적화하기"
+                    else: state_txt = f"[{level}단계 완료]"
+                elif status == "FAILED":
+                    state_txt = f"[❌ {level}단계 실패]"
+                else:
+                    state_txt = f"[⏳ {level}단계 진행중]"
+                    
+                display_text = f"{icon}{t['tsk_nm']} {state_txt}"
+                self.wizard.task_list_cb.addItem(display_text, t)
+                
+                if level >= 2 and status == "SUCCESS":
+                    self.wizard.export_task_cb.addItem(f"✅ {t['tsk_nm']}", t['id'])
 
     def load_selected_report(self):
-        task_id = self.wizard.task_list_cb.currentData()
-        if not task_id: return
+        task_data = self.wizard.task_list_cb.currentData()
+        if not task_data: return
         
-        data = self.ctx.api.get(f"/api/v1/tasks/report?task_id={task_id}")
-        if data:
-            self.report = ReportWindow(self.ctx, data)
-            self.report.show()
+        task_id = task_data['id']
+        name = task_data['tsk_nm']
+        level = task_data.get('level', 1)
+        status = task_data.get('status', 'FAILED')
+        
+        if status == "RUNNING":
+            QMessageBox.information(self, "진행 중", f"현재 {level}단계 작업이 진행 중입니다. ⏳")
+            return
+
+        if status == "FAILED":
+            if QMessageBox.warning(self, "작업 실패", f"[{name}] {level}단계 재시도할까요?", QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
+                self.ctx.api.post("/api/v1/tasks/restart", {"task_id": task_id})
+            return
+
+        if status == "SUCCESS":
+            if level == 1:
+                if QMessageBox.question(self, "1단계 완료", "2단계(학습) 설정으로 이동할까요?", QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
+                    self.current_resume_task_id = task_id
+                    self.wizard.task_name_edit.setText(name)
+                    self.wizard.task_name_edit.setEnabled(False)
+                    self.wizard.stack.setCurrentIndex(2) # SOP 2단계(학습)
+            elif level == 2:
+                if QMessageBox.question(self, "2단계 완료", "3단계(최적화) 설정으로 이동할까요?", QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
+                    self.wizard.stack.setCurrentIndex(3) # SOP 3단계(최적화)
+                    idx = self.wizard.export_task_cb.findData(task_id)
+                    if idx >= 0: self.wizard.export_task_cb.setCurrentIndex(idx)
+            elif level == 3:
+                data = self.ctx.api.get(f"/api/v1/tasks/report?task_id={task_id}")
+                if data:
+                    self.report = ReportWindow(self.ctx, data)
+                    self.report.show()
+
+    def run_export_pipeline(self):
+        """UI에서 설정한 파라미터로 모델 내보내기/양자화 공정 실행"""
+        task_id = self.wizard.export_task_cb.currentData()
+        task_name = self.wizard.export_task_cb.currentText().split(" (")[0]
+        
+        if not task_id:
+            QMessageBox.warning(self, "경고", "내보낼 태스크를 먼저 선택해주세요.")
+            return
+
+        do_quant = self.wizard.chk_quantize.isChecked()
+        method = self.wizard.method_cb.currentText()
+        only_quant = self.wizard.chk_only_quant.isChecked()
+        
+        payload = {
+            "task_id": task_id,
+            "task_name": task_name,
+            "no_quantize": not do_quant,
+            "only_quantize": only_quant,
+            "method": method
+        }
+        
+        res = self.ctx.api.post("/api/v1/tasks/export", payload)
+        if res:
+            QMessageBox.information(self, "공정 시작", 
+                                  f"[{task_name}] 모델 최적화 공정이 시작되었습니다.\n"
+                                  f"- 양자화: {'활성' if do_quant else '비활성'}\n"
+                                  f"- 방식: {method}\n"
+                                  f"- 모드: {'후처리 전용' if only_quant else '전체 공정'}")
 
     def update_cpu_affinity(self, val):
         self.ctx.api.post("/api/v1/hardware/affinity", {"cores": val})

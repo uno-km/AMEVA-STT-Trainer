@@ -12,6 +12,7 @@ class DatabaseManager:
 
     def get_connection(self):
         conn = sqlite3.connect(self.db_path)
+        conn.text_factory = str # SQLite에서 한글(Unicode)을 정확히 처리하도록 설정
         conn.row_factory = sqlite3.Row
         return conn
 
@@ -19,21 +20,52 @@ class DatabaseManager:
         with self.get_connection() as conn:
             cursor = conn.cursor()
             
-            # Task 테이블 생성 (스텝 및 상태 정보 추가)
+            # 1. tb_task: 메인 태스크 테이블
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS tb_task (
                     id TEXT PRIMARY KEY,
                     tsk_nm TEXT NOT NULL,
                     create_dt TEXT NOT NULL,
-                    step_lv INTEGER DEFAULT 1,
-                    step_stts TEXT DEFAULT 'RUNNING',
+                    level INTEGER DEFAULT 1,
+                    status TEXT DEFAULT 'RUNNING',
                     stts_dt TEXT,
+                    model_path TEXT,
+                    report_path TEXT,
                     log_id INTEGER,
                     FOREIGN KEY (log_id) REFERENCES tb_log (log_id)
                 )
             ''')
             
-            # Metadata 매핑 테이블 생성
+            # 1-1. tb_metric: 학습 메트릭(차트용 데이터) 테이블
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS tb_metric (
+                    metric_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_id TEXT,
+                    step INTEGER,
+                    loss REAL,
+                    accuracy REAL,
+                    cpu_usage REAL,
+                    speed REAL,
+                    create_dt TEXT,
+                    FOREIGN KEY (task_id) REFERENCES tb_task (id) ON DELETE CASCADE
+                )
+            ''')
+            
+            # 2. tb_task_dtl: 상세 워크플로우 테이블
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS tb_task_dtl (
+                    dtl_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_id TEXT,
+                    step_seq INTEGER,
+                    step_name TEXT,
+                    parameters TEXT,
+                    status TEXT DEFAULT 'PENDING',
+                    next_step INTEGER,
+                    FOREIGN KEY (task_id) REFERENCES tb_task (id) ON DELETE CASCADE
+                )
+            ''')
+            
+            # 3. tb_metadata: 데이터셋 매핑 테이블
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS tb_metadata (
                     meta_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -45,10 +77,10 @@ class DatabaseManager:
                 )
             ''')
             
-            # AUTOINCREMENT 초기값 설정 (최초 1회만 적용됨)
+            # AUTOINCREMENT 초기값 설정
             cursor.execute("INSERT OR IGNORE INTO sqlite_sequence (name, seq) VALUES ('tb_metadata', 1000000)")
             
-            # Chunk 매핑 테이블 생성
+            # 4. tb_chunk: 오디오 조각 매핑 테이블
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS tb_chunk (
                     chunk_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -60,7 +92,7 @@ class DatabaseManager:
                 )
             ''')
             
-            # Log 테이블 생성 (통합 로그 및 태스크 개별 로그 관리)
+            # 5. tb_log: 로그 테이블
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS tb_log (
                     log_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -74,6 +106,7 @@ class DatabaseManager:
             
             conn.commit()
 
+    # --- 로그 및 상태 관리 ---
     def add_log(self, level: str, message: str, task_id: str = None) -> int:
         create_dt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with self.get_connection() as conn:
@@ -91,52 +124,84 @@ class DatabaseManager:
             if task_id:
                 cursor.execute('SELECT * FROM tb_log WHERE task_id = ? ORDER BY create_dt ASC LIMIT ?', (task_id, limit))
             else:
-                # 통합 로그 (최신 순으로 가져와서 표시 시엔 정렬 고려)
                 cursor.execute('SELECT * FROM tb_log ORDER BY create_dt ASC LIMIT ?', (limit,))
             return [dict(row) for row in cursor.fetchall()]
 
-    def update_task_status(self, task_id: str, step_lv: int, step_stts: str, log_msg: str = None):
-        """태스크의 현재 단계와 상태를 업데이트하고 로그를 남깁니다."""
+    def update_task_status(self, task_id: str, level: int, status: str, log_msg: str = None, model_path: str = None, report_path: str = None):
         stts_dt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         log_id = None
         if log_msg:
-            log_id = self.add_log(step_stts, log_msg, task_id)
+            log_id = self.add_log(status, log_msg, task_id)
             
         with self.get_connection() as conn:
-            conn.execute('''
-                UPDATE tb_task 
-                SET step_lv = ?, step_stts = ?, stts_dt = ?, log_id = ?
-                WHERE id = ?
-            ''', (step_lv, step_stts, stts_dt, log_id, task_id))
+            sql = "UPDATE tb_task SET level = ?, status = ?, stts_dt = ?"
+            params = [level, status, stts_dt]
+            if log_id:
+                sql += ", log_id = ?"
+                params.append(log_id)
+            if model_path:
+                sql += ", model_path = ?"
+                params.append(model_path)
+            if report_path:
+                sql += ", report_path = ?"
+                params.append(report_path)
+            sql += " WHERE id = ?"
+            params.append(task_id)
+            conn.execute(sql, tuple(params))
             conn.commit()
 
+    def add_metric(self, task_id: str, step: int, loss: float, accuracy: float, cpu_usage: float, speed: float) -> int:
+        create_dt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO tb_metric (task_id, step, loss, accuracy, cpu_usage, speed, create_dt) 
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (task_id, step, loss, accuracy, cpu_usage, speed, create_dt))
+            conn.commit()
+            return cursor.lastrowid
+
+    def get_metrics(self, task_id: str):
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT * FROM tb_metric WHERE task_id = ? ORDER BY step ASC', (task_id,))
+            return [dict(row) for row in cursor.fetchall()]
+
+    # --- 태스크 관리 ---
+    def create_task(self, tsk_nm: str) -> str:
+        task_id = str(uuid.uuid4())
+        create_dt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with self.get_connection() as conn:
+            conn.execute('INSERT INTO tb_task (id, tsk_nm, create_dt, level, status) VALUES (?, ?, ?, 1, "RUNNING")', 
+                         (task_id, tsk_nm, create_dt))
+            conn.commit()
+        return task_id
+
     def create_next_version_task(self, base_task_id: str) -> str:
-        """기존 태스크의 이름을 유지하며 버전을 올려 새 태스크를 생성합니다 (예: 슈카 -> 2_슈카)."""
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('SELECT tsk_nm FROM tb_task WHERE id = ?', (base_task_id,))
             row = cursor.fetchone()
             if not row: return self.create_task("Unknown_Task")
-            
             old_name = row['tsk_nm']
-            # 버전 번호 추출 및 증가 (예: "2_슈카" -> 3)
             if "_" in old_name and old_name.split("_")[0].isdigit():
                 version = int(old_name.split("_")[0]) + 1
                 new_name = f"{version}_{'_'.join(old_name.split('_')[1:])}"
             else:
                 new_name = f"2_{old_name}"
-                
             return self.create_task(new_name)
 
-    def create_task(self, tsk_nm: str) -> str:
-        task_id = str(uuid.uuid4())
-        create_dt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    def add_task_dtl(self, task_id: str, step_seq: int, step_name: str, parameters: str, next_step: int = None) -> int:
         with self.get_connection() as conn:
-            conn.execute('INSERT INTO tb_task (id, tsk_nm, create_dt) VALUES (?, ?, ?)', 
-                         (task_id, tsk_nm, create_dt))
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO tb_task_dtl (task_id, step_seq, step_name, parameters, next_step) 
+                VALUES (?, ?, ?, ?, ?)
+            ''', (task_id, step_seq, step_name, parameters, next_step))
             conn.commit()
-        return task_id
+            return cursor.lastrowid
 
+    # --- 데이터셋/청크 관리 (복구됨) ---
     def create_metadata(self, task_id: str, file_name: str, folder_path: str) -> int:
         create_dt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with self.get_connection() as conn:
@@ -158,6 +223,7 @@ class DatabaseManager:
             conn.commit()
             return cursor.lastrowid
 
+    # --- 조회 기능 ---
     def get_all_tasks(self):
         with self.get_connection() as conn:
             cursor = conn.cursor()
@@ -170,16 +236,16 @@ class DatabaseManager:
             cursor.execute('SELECT * FROM tb_task WHERE id = ?', (task_id,))
             task = cursor.fetchone()
             if not task: return None
-            
             task_dict = dict(task)
-            
+            # 상세 워크플로우 정보 추가
+            cursor.execute('SELECT * FROM tb_task_dtl WHERE task_id = ? ORDER BY step_seq ASC', (task_id,))
+            task_dict['details'] = [dict(row) for row in cursor.fetchall()]
+            # 메타데이터 및 청크 정보 추가
             cursor.execute('SELECT * FROM tb_metadata WHERE task_id = ?', (task_id,))
             metadatas = [dict(row) for row in cursor.fetchall()]
-            
             for meta in metadatas:
                 cursor.execute('SELECT * FROM tb_chunk WHERE meta_id = ?', (meta['meta_id'],))
                 meta['chunks'] = [dict(row) for row in cursor.fetchall()]
-                
             task_dict['metadatas'] = metadatas
             return task_dict
 

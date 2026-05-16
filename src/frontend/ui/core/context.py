@@ -33,12 +33,12 @@ class UIContext(QtCore.QObject):
             "text_dim": "#6c7086"
         }
         
-        # 폰트 바인딩
+        # 폰트 바인딩 (한글 깨짐 방지를 위해 맑은 고딕 사용)
         self.fonts = {
-            "main": self.G.QFont("Segoe UI", 10),
-            "title": self.G.QFont("Segoe UI", 14, self.G.QFont.Weight.Bold),
-            "log": self.G.QFont("Consolas", 10),
-            "small": self.G.QFont("Segoe UI", 9)
+            "main": self.G.QFont("Malgun Gothic", 10),
+            "title": self.G.QFont("Malgun Gothic", 14, self.G.QFont.Weight.Bold),
+            "log": self.G.QFont("Malgun Gothic", 10),
+            "small": self.G.QFont("Malgun Gothic", 9)
         }
     
     def get_color(self, key):

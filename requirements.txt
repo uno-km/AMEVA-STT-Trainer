@@ -34,3 +34,7 @@ numpy
 # sqlite3
 PyQt6
 
+
+# Word Reporting & Charts
+python-docx
+matplotlib

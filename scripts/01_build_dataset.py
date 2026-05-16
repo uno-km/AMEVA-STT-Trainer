@@ -94,34 +94,43 @@ def run_full_investigation():
 
 def main():
     parser = argparse.ArgumentParser(description="AMEVA-STT Dataset Builder")
-    parser.add_argument("--mode", type=str, default="basic", choices=["basic", "advanced"], help="전처리 모드 선택 (basic: 25초 고정, advanced: 15초 스마트)")
+    parser.add_argument("--mode", type=str, default="basic", choices=["basic", "advanced"], help="전처리 모드 선택")
+    parser.add_argument("--task-id", type=str, help="태스크 ID (자동화 연동용)")
+    parser.add_argument("--source_type", type=str, default="youtube")
+    parser.add_argument("--url", type=str, default="")
+    parser.add_argument("--count", type=int, default=5)
+    parser.add_argument("--folder", type=str, default="")
     args = parser.parse_args()
+
+    task_id = args.task_id or os.environ.get("CURRENT_TASK_ID")
 
     # 실시간 대시보드 화면 활성화
     with logger.dashboard_context():
         logger.info("=" * 50)
-        logger.info(f"[1단계] 데이터셋 빌드 시작 (모드: {args.mode.upper()})")
+        logger.info(f"[1단계] 데이터셋 빌드 시작 (태스크: {task_id})")
         logger.info("=" * 50)
 
-        # 1. 유튜브 채널 정보 수집 및 다운로드
-        logger.set_status("유튜브 수집 중", "채널 목록 및 오디오 수집")
-        video_list = scrape_channel()
+        # 1. 데이터 수집 (유튜브 혹은 폴더)
+        logger.set_status("데이터 수집 중", "채널 목록 및 오디오 수집")
+        if args.source_type == "youtube":
+            video_list = scrape_channel(url=args.url, count=args.count)
+        else:
+            logger.warning(f"Local folder mode not implemented: {args.folder}")
+            video_list = []
 
         if not video_list:
             logger.warning("수집된 영상이 없습니다.")
+            if task_id:
+                from src.backend.core.database import db_manager
+                db_manager.update_task_status(task_id, level=1, status="FAILED", log_msg="No videos scraped.")
             return
 
         # 2. 오디오 전처리 및 청크 분할
         logger.set_status("오디오 전처리 중", "병렬 처리 및 자막 병합")
         all_entries = []
         for i, (vid, date_str, a_path, v_path) in enumerate(video_list):
-            if not a_path or not v_path:
-                continue
-            
-            # 진행 상황 업데이트
+            if not a_path or not v_path: continue
             logger.set_status("오디오 전처리 중", f"[{i+1}/{len(video_list)}] {vid} 분할 중")
-            
-            # 자막 중복 제거 및 청크 생성 로직 실행 (모드 전달)
             entries = process_video(vid, date_str, a_path, v_path, mode=args.mode)
             all_entries.extend(entries)
 
@@ -131,16 +140,27 @@ def main():
             df.to_csv(METADATA_PATH, index=False, encoding="utf-8-sig")
             logger.info(f"메타데이터 저장 완료: {len(df)}개 레코드")
 
-            # 4. 데이터셋 검수 (기존 검수 로직)
+            # 4. 데이터셋 검수
             logger.set_status("검수 중", "데이터 무결성 검증")
             validate_dataset()
+            
+            # [추가] DB 업데이트 및 다음 단계(학습) 트리거
+            if task_id:
+                from src.backend.core.database import db_manager
+                from src.backend.core.task_manager import task_manager
+                db_manager.update_task_status(task_id, level=1, status="SUCCESS", log_msg="Step 1 (Data Prep) completed.")
+                logger.info(f"Task {task_id} status updated. Triggering next step...")
+                task_manager.trigger_next_step(task_id)
         else:
             logger.error("생성된 데이터셋 레코드가 없습니다.")
+            if task_id:
+                from src.backend.core.database import db_manager
+                db_manager.update_task_status(task_id, level=1, status="FAILED", log_msg="No dataset entries generated.")
 
     # [수정] 대시보드 종료 및 플래그 초기화
     logger.stop_dashboard()
     
-    # 이제 터미널에 리포트 출력 (화면 고정)
+    # 이제 터미널에 리포트 출력
     run_full_investigation()
     logger.success("데이터셋 준비 프로세스 종료")
 

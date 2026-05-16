@@ -6,6 +6,13 @@ scripts/02_start_training.py
 """
 import sys
 import os
+import io
+
+# 윈도우 터미널 한글 깨짐 방지
+if sys.platform == 'win32':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+
 import psutil
 import argparse
 from rich.console import Console
@@ -105,10 +112,30 @@ def main():
         logger.info(f"[WandB] '{CFG['wandb']['project']}' 프로젝트로 로그 전송 시작 (Mode: {CFG['wandb']['mode']})")
 
     # 3. 학습 실행
+    task_id = os.environ.get("CURRENT_TASK_ID") 
+    env_steps = os.environ.get("TRAIN_MAX_STEPS")
+    if env_steps:
+        logger.info(f"[Workflow] Max Steps override: {env_steps}")
+        CFG["max_steps"] = int(env_steps) # 환경변수 값이 있으면 10스텝으로 고정
+
+    from src.backend.core.database import db_manager
+
     try:
         run_training(resume_from_checkpoint=args.resume_from_checkpoint)
+        
+        # 학습 성공 시 DB 업데이트 (Level 2: 학습 완료)
+        if task_id:
+            db_manager.update_task_status(task_id, level=2, status="SUCCESS", log_msg="Step 2 (Training) completed successfully.")
+            logger.info(f"Task {task_id} status updated to Level 2 SUCCESS.")
+            
+            # --- [핵심] 다음 단계(Next Step) 자동 실행 트리거 ---
+            from src.backend.core.task_manager import task_manager
+            task_manager.trigger_next_step(task_id)
+            
     except Exception as e:
         logger.error(f"학습 도중 오류 발생: {e}")
+        if task_id:
+            db_manager.update_task_status(task_id, level=2, status="FAILED", log_msg=f"Training failed: {e}")
     finally:
         if CFG["wandb"]["enabled"]:
             import wandb

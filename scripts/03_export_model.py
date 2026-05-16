@@ -9,6 +9,13 @@ scripts/03_export_model.py
 """
 import sys
 import os
+import io
+
+# 윈도우 터미널 한글 깨짐 방지
+if sys.platform == 'win32':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+
 import shutil
 import subprocess
 
@@ -24,104 +31,77 @@ from rich.console            import Group
 
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Whisper LoRA Merge & Quantization Tool")
+    parser.add_argument("--no-quantize", action="store_true", help="양자화 단계를 건너뛰고 원본 FP 모델만 생성합니다.")
+    parser.add_argument("--only-quantize", action="store_true", help="병합 단계를 건너뛰고 기존 바이너리에 대한 양자화만 수행합니다.")
+    parser.add_argument("--method", type=str, default="q4_0", help="양자화 방식 (기본값: q4_0)")
+    args = parser.parse_args()
+
     try:
         print("\n" + "=" * 50)
-        print("[3단계] 모델 내보내기 및 병합 시작")
+        print("[3단계] 모델 내보내기 및 최적화 공정 시작")
         print("=" * 50)
 
-        # ---- 1단계: LoRA 가중치 병합 ----
-        print("[*] 모델 병합 중: LoRA 어댑터와 베이스 모델을 합치는 중...")
+        from src.models.quantizer import WhisperQuantizer
+        whisper_cpp_dir = os.path.join(os.path.dirname(__file__), "..", "third_party", "whisper.cpp")
+        quantizer = WhisperQuantizer(whisper_cpp_dir=whisper_cpp_dir)
         
-        if not os.path.exists(LORA_DIR):
-            print(f"❌ [Error] LoRA 어댑터 없음: {LORA_DIR}")
-            return
+        final_model_name = f"ggml-shuka-tiny-{args.method}.bin"
+        merged_path = MERGED_DIR
 
-        # 실제 병합 로직 실행
-        merged_path = merge_and_save()
-        print(f"✅ 병합 완료: {merged_path}")
-
-        # ---- 2단계: 변환 도구(whisper.cpp) 자가 진단 및 준비 ----
-        print("[*] 변환 도구 확인 중...")
+        # ---- 단독 양자화(후처리) 모드 ----
+        if args.only_quantize:
+            print("[*] 단독 후처리 모드: 기존 GGML 바이너리를 양자화합니다.")
+            source_bin = "ggml-model.bin" # 기본 생성 이름
+            final_bin = quantizer.quantize_existing_bin(source_bin, final_model_name, method=args.method)
         
-        ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-        third_party_dir = os.path.join(ROOT_DIR, "third_party")
-        whisper_cpp_dir = os.path.join(third_party_dir, "whisper.cpp")
-        converter_script = os.path.join(whisper_cpp_dir, "models", "convert-h5-to-ggml.py")
+        else:
+            # ---- 1단계: LoRA 가중치 병합 ----
+            print("[*] 모델 병합 중: LoRA 어댑터와 베이스 모델을 합치는 중...")
+            if not os.path.exists(LORA_DIR):
+                print(f"❌ [Error] LoRA 어댑터 없음: {LORA_DIR}")
+                return
+            
+            merged_path = merge_and_save()
+            print(f"✅ 병합 완료: {merged_path}")
 
-        # 도구가 없으면 깃 클론 시도
-        if not os.path.exists(whisper_cpp_dir):
-            print("[!] whisper.cpp 도구가 없습니다. 자동으로 클론을 시작합니다...")
-            os.makedirs(third_party_dir, exist_ok=True)
-            subprocess.run([
-                "git", "clone", "--depth", "1", 
-                "https://github.com/ggerganov/whisper.cpp.git", 
-                whisper_cpp_dir
-            ], check=True)
-            print("✅ 도구 클론 완료!")
-
-        # ---- 2.5단계: 변환용 미싱 파일 보완 (added_tokens.json 등) ----
-        added_tokens_path = os.path.join(merged_path, "added_tokens.json")
-        if not os.path.exists(added_tokens_path):
-            with open(added_tokens_path, "w", encoding="utf-8") as f:
-                f.write("{}")
-            print("[*] 미싱 파일 생성: added_tokens.json")
-
-        whisper_assets_dir = os.path.join(third_party_dir, "whisper_assets")
+            # ---- 2단계: 후처리 (GGUF 변환 및 선택적 양자화) ----
+            print(f"[*] 후처리 시작: GGUF 변환 및 {'양자화' if not args.no_quantize else '원본 배포'}...")
+            output_path = quantizer.run_post_process(merged_path, final_model_name, skip_quantize=args.no_quantize)
         
-        # 에셋 도구가 없으면 파이썬이 직접 다운로드 시도 로직 (이미 되어있으므로 경로만 설정)
-        if not os.path.exists(whisper_assets_dir):
-            print("[!] Whisper 에셋이 없습니다. 자동으로 다운로드를 시작합니다...")
-            os.makedirs(os.path.join(whisper_assets_dir, "whisper", "assets"), exist_ok=True)
-            asset_url = "https://raw.githubusercontent.com/openai/whisper/main/whisper/assets/mel_filters.npz"
-            asset_out = os.path.join(whisper_assets_dir, "whisper", "assets", "mel_filters.npz")
-            subprocess.run(["powershell", "-Command", f"Invoke-WebRequest -Uri {asset_url} -OutFile {asset_out}"], check=True)
-            print("✅ 에셋 다운로드 완료!")
-
-        # ---- 3단계: GGUF(GGML) 변환 실행 ----
-        print("[*] GGUF 변환 중: 모델 포맷을 GGML로 변환하는 중... (수 분 소요)")
-        
-        if not os.path.exists(converter_script):
-            print(f"❌ [Error] 변환 스크립트를 찾을 수 없습니다: {converter_script}")
-            return
-
-        # 변환 실행 (실시간 로그를 위해 capture_output 제거)
-        process = subprocess.run([
-            sys.executable, converter_script, 
-            merged_path, 
-            whisper_assets_dir, # <-- 이제 진짜 에셋 경로를 줍니다!
-            "." 
-        ])
-        
-        if process.returncode != 0:
-            print(f"❌ [Error] 변환 실패 (Exit Code: {process.returncode})")
-            return
-        
-        print("✅ GGUF 변환 완료!")
-
-        # ---- 4단계: 최종 모델 배포 ----
+        # ---- 3단계: 최종 모델 배포 ----
         print("[*] 배포 중: 에이전트 모델 폴더로 이동 중...")
         
-        source_bin = "ggml-model.bin"
-        target_name = "ggml-shuka-tiny.bin"
-        final_dest = os.path.join(GGUF_DIR, target_name)
-        
-        os.makedirs(GGUF_DIR, exist_ok=True)
-        
-        if os.path.exists(source_bin):
+        if output_path and os.path.exists(output_path):
+            os.makedirs(GGUF_DIR, exist_ok=True)
+            final_dest = os.path.join(GGUF_DIR, os.path.basename(output_path))
+            
             if os.path.exists(final_dest):
                 os.remove(final_dest)
-            shutil.move(source_bin, final_dest)
-            print(f"✅ 최종 모델 배포 완료: {final_dest}")
+            shutil.move(output_path, final_dest)
+            
+            print("\n" + "="*50)
+            print("🎉 [SUCCESS] 도메인 특화 STT 모델 탄생!")
+            print(f"📍 위치: {final_dest}")
+            print("🚀 AMEVA-STT-Agent에서 '기타 모델 선택'으로 불러오세요.")
+            print("="*50 + "\n")
+            
+            # DB 업데이트 (Level 3: 최적화 및 배포 완료)
+            task_id = os.environ.get("CURRENT_TASK_ID")
+            if task_id:
+                from src.backend.core.database import db_manager
+                db_manager.update_task_status(task_id, level=3, status="SUCCESS", 
+                                            log_msg=f"Step 3 (Export) completed. Model saved at {final_dest}",
+                                            model_path=final_dest)
+                print(f"Task {task_id} status updated to Level 3 SUCCESS.")
         else:
-            print("❌ [Error] 변환된 .bin 파일을 찾을 수 없습니다.")
+            print("❌ [Error] 최종 모델 파일이 생성되지 않았습니다.")
+            task_id = os.environ.get("CURRENT_TASK_ID")
+            if task_id:
+                from src.backend.core.database import db_manager
+                db_manager.update_task_status(task_id, level=3, status="FAILED", log_msg="Step 3 (Export) failed: Output file missing.")
             return
-
-        # ---- 5단계: 완료 안내 패널 ----
-        print("\n" + "="*50)
-        print("🎉 [SUCCESS] 슈카 AI 모델 탄생!")
-        print(f"📍 위치: {final_dest}")
-        print("🚀 AMEVA-STT-Agent에서 '기타 모델 선택'으로 불러오세요.")
-        print("="*50 + "\n")
 
     except Exception as e:
         print("\n" + "!"*60)

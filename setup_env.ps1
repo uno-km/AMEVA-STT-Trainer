@@ -11,6 +11,7 @@ python -m pip install --upgrade pip
 
 Write-Host "Installing dependencies from requirements.txt..." -ForegroundColor Cyan
 pip install -r requirements.txt
+pip install python-docx matplotlib pandas # 리포트 생성용 추가
 
 Write-Host "Verifying WandB installation..." -ForegroundColor Cyan
 python -c "import wandb; print(f'WandB Version: {wandb.__version__}')"

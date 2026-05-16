@@ -195,14 +195,14 @@ def download_video_data(video_id: str, video_dir: str) -> Tuple[Optional[str], O
 #  전체 채널 수집 진입점                                                          #
 # ---------------------------------------------------------------------------- #
 
-def scrape_channel() -> List[VideoInfo]:
+def scrape_channel(url: str = None, count: int = None) -> List[VideoInfo]:
     """
-    설정에 따라 채널의 최신 N개 영상을 수집하고
+    제공된 URL 혹은 설정의 채널에서 최신 N개 영상을 수집한다.
     VideoInfo 리스트를 반환한다.
     """
-    # 전역 설정에서 채널 URL 과 최대 수집 영상 수 로드
-    channel_url = CFG["channel_url"]
-    max_videos  = CFG["max_videos"]
+    # 전역 설정 혹은 인자로 받은 채널 URL 과 최대 수집 영상 수 로드
+    channel_url = url if url else CFG["channel_url"]
+    max_videos  = count if count else CFG["max_videos"]
 
     # 영상 ID, 날짜, 제목 목록 수집
     pairs = get_video_info_list(channel_url, max_videos)

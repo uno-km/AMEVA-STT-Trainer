@@ -68,22 +68,30 @@ def list_tasks():
     from src.backend.core.database import db_manager
     return {"tasks": db_manager.get_all_tasks()}
 
-@router.post("/api/v1/tasks/create")
-def create_task(body: dict):
-    from src.backend.core.database import db_manager
+@router.post("/api/v1/tasks/init_data")
+def init_data(body: dict):
     name = body.get("name", "Unnamed Task")
+    source_type = body.get("source_type", "youtube")
+    url = body.get("url", "")
+    count = body.get("count", 5)
+    folder = body.get("folder", "")
     
-    # 1. DB에 태스크 생성
-    task_id = db_manager.create_task(name)
-    db_manager.update_task_status(task_id, 1, "RUNNING", "Task created and starting step 1.")
+    # 1단계 시작
+    task_info = task_manager.init_data(name, source_type, url, count, folder)
+    return task_info
+
+@router.post("/api/v1/tasks/start_train")
+def start_train(body: dict):
+    task_id = body.get("task_id")
+    if not task_id: return {"error": "Missing task_id"}
     
-    # 2. 물리적 폴더 생성 (UUID 기반)
-    base_dir = r"c:\ameva\AMEVA-STT-Trainer"
-    task_folder = os.path.join(base_dir, "dataset", f"{name}_{task_id}")
-    os.makedirs(task_folder, exist_ok=True)
+    max_steps = body.get("max_steps", 100)
+    auto_export = body.get("auto_export", True)
+    method = body.get("method", "q4_0")
     
-    pipeline_state.current_task_name = task_id
-    return {"id": task_id, "name": name, "path": task_folder}
+    # 2-3단계 가동
+    res = task_manager.start_train(task_id, max_steps, auto_export, method)
+    return res
 
 @router.post("/api/v1/tasks/restart")
 def restart_task(body: dict):
@@ -102,17 +110,26 @@ def restart_task(body: dict):
 @router.get("/api/v1/tasks/report")
 def get_task_report(task_id: str = None):
     from src.backend.core.database import db_manager
+    from src.backend.core.reporter import report_generator
+    
     tid = task_id or pipeline_state.current_task_name
     task_details = db_manager.get_task_details(tid)
     
     if not task_details: 
         return {"error": "Task not found"}
     
+    # 워드 리포트 생성
+    report_path = None
+    try:
+        report_path = report_generator.generate_task_report(tid)
+    except Exception as e:
+        print(f"Failed to generate Word report: {e}")
+    
     # 보고서 구조 생성
     report = {
         "task_info": task_details,
         "logs": db_manager.get_logs(task_id=tid, limit=1000),
-        "files": [] # DB 기반 리포팅으로 변경됨
+        "word_report_path": report_path
     }
     return report
 
