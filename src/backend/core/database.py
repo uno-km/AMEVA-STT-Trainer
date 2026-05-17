@@ -131,6 +131,7 @@ class DatabaseManager:
                     create_dt TEXT NOT NULL,
                     FOREIGN KEY (task_id) REFERENCES tb_task (id) ON DELETE CASCADE
                 )
+            ''')
             
             # 7. tb_thread_log: 쓰레드 개수 조절 기록 테이블
             cursor.execute('''
