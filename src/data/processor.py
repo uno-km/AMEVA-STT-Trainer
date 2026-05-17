@@ -12,7 +12,12 @@ from src.core.config import CFG, DATASET_DIR
 from src.core.exceptions import TranscriptError, exception_guard
 from src.utils import logger
 from src.utils.audio_utils import load_wav, export_chunk, slice_audio, normalize_audio, trim_silence
-
+PIPELINE_COUNTERS = {
+    "invalid_timestamp_skip": 0,
+    "overlap_clamp_count": 0,
+    "post_clamp_skip": 0,
+    "too_short_chunk_drop": 0
+}
 
 # ---------------------------------------------------------------------------- #
 #  텍스트 정제 및 중복 제거 로직 (Integrity Enhanced)                            #
@@ -168,6 +173,9 @@ def process_video(
         sliced = trim_silence(sliced)
         sliced = normalize_audio(sliced)
         
+        if len(sliced) < CFG["min_chunk_duration_ms"]:
+            PIPELINE_COUNTERS["too_short_chunk_drop"] += 1
+
         if export_chunk(sliced, chunk_abs):
             entries.append({
                 "file_name": chunk_rel, 
@@ -181,12 +189,15 @@ def process_video(
         
         # [고도화] 1단계: 원본 자막 자체가 이미 깨진 데이터(역전/길이 0)인 경우 원천 스킵
         if end_ms <= start_ms:
+            PIPELINE_COUNTERS["invalid_timestamp_skip"] += 1
             continue
             
         # 2단계: 자막 타임라인 겹침 보정 (이전 캡션 범위 내에 속할 때만 clamp 하되, clamp 후 음수 슬라이스 방지 가드 탑재)
         if cur_start_ms != -1 and start_ms < cur_end_ms:
+            PIPELINE_COUNTERS["overlap_clamp_count"] += 1
             start_ms = cur_end_ms
             if end_ms <= start_ms:
+                PIPELINE_COUNTERS["post_clamp_skip"] += 1
                 continue
         
         if cur_start_ms == -1:

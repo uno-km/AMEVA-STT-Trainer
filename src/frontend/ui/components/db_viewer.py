@@ -12,7 +12,9 @@ class DBViewerPanel(QWidget):
     def __init__(self, ctx):
         super().__init__()
         self.ctx = ctx
-        self.db_path = r"c:\ameva\AMEVA-STT-Trainer\db\stt_trainer.db"
+        # 현재 파일 위치(src/frontend/ui/components/db_viewer.py) 기준 4단계 상위 폴더를 루트로 동적 계산
+        base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
+        self.db_path = os.path.join(base_dir, "db", "stt_trainer.db")
         self.init_ui()
         self.load_table_data()
 

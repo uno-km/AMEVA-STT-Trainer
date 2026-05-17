@@ -202,13 +202,14 @@ class DashboardWindow(QMainWindow):
             self.log_panel.max_btn.setText("🔲")
 
     def toggle_chart_maximize(self, chart_widget):
-        """특정 모델 성능 실시간 차트 집중 관찰 극대화 전환"""
+        """특정 모델 성능 실시간 차트 집중 관찰 극대화 전환 (C++ 객체 소멸 크래시 방지 세팅)"""
         if self.chart_stack.currentIndex() == 0:
             max_page = QWidget()
             max_layout = QVBoxLayout(max_page)
             max_layout.setContentsMargins(0,0,0,0)
             chart_widget.max_btn.setText("🔙")
             self.chart_grid.removeWidget(chart_widget)
+            chart_widget.setParent(max_page)  # 부모 객체를 max_page로 명시적 이관하여 소멸 방지
             max_layout.addWidget(chart_widget)
             idx = self.chart_stack.addWidget(max_page)
             self.chart_stack.setCurrentIndex(idx)
@@ -218,18 +219,34 @@ class DashboardWindow(QMainWindow):
             chart_widget.max_btn.setText("🔍")
             self.chart_stack.setCurrentIndex(0)
             idx = self.charts.index(chart_widget)
+            chart_widget.setParent(self.grid_view)  # 원래의 grid_view로 안전하게 재이관
             self.chart_grid.addWidget(chart_widget, idx // 2, idx % 2)
             self.chart_stack.removeWidget(current_page)
             current_page.deleteLater()
 
     def on_file_double_clicked(self, item, col):
-        """CSV 등 전처리 데이터셋의 즉각적인 탭 뷰어 열기 기능"""
+        """CSV 및 일반 텍스트 데이터셋의 즉각적인 탭 뷰어 열기 기능 (중복 오픈 방지 가드 장착)"""
         path = item.data(0, Qt.ItemDataRole.UserRole)
-        if not path: 
+        if not path or not os.path.isfile(path): 
             return
+            
+        # 중복 오픈 방지: 이미 열린 파일 탭이 있으면 해당 탭을 즉시 포커스
+        for idx in range(self.tabs.count()):
+            tab_widget = self.tabs.widget(idx)
+            if hasattr(tab_widget, 'file_path') and tab_widget.file_path == path:
+                self.tabs.setCurrentIndex(idx)
+                return
+
         if path.endswith(".csv"):
             viewer = CSVViewer(self.ctx, path)
-            self.tabs.addTab(viewer, os.path.basename(path))
+            viewer.file_path = path  # 중복 추적 속성 바인딩
+            self.tabs.addTab(viewer, f"📊 {os.path.basename(path)}")
+            self.tabs.setCurrentWidget(viewer)
+        elif path.endswith((".log", ".md", ".txt", ".yaml", ".json", ".ini", ".py", ".pyw")):
+            from src.frontend.ui.components.viewers import TextFileViewer
+            viewer = TextFileViewer(self.ctx, path)
+            viewer.file_path = path  # 중복 추적 속성 바인딩
+            self.tabs.addTab(viewer, f"📄 {os.path.basename(path)}")
             self.tabs.setCurrentWidget(viewer)
 
     def close_tab_safe(self, idx):

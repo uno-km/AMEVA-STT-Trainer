@@ -199,8 +199,10 @@ class WizardPanel(QWidget):
             
             task_id = None
             try:
-                import sqlite3
-                conn = sqlite3.connect(r"c:\ameva\AMEVA-STT-Trainer\db\stt_trainer.db")
+                # 현재 파일 위치(src/frontend/ui/components/wizard_panel.py) 기준 4단계 상위 폴더를 루트로 동적 계산
+                base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
+                db_path = os.path.join(base_dir, "db", "stt_trainer.db")
+                conn = sqlite3.connect(db_path)
                 cursor = conn.cursor()
                 cursor.execute("SELECT id FROM tb_task WHERE tsk_nm = ? ORDER BY created_at DESC LIMIT 1", (task_name,))
                 row = cursor.fetchone()

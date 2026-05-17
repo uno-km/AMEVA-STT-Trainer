@@ -69,8 +69,8 @@ class DashboardPresenter:
                 active_name = None
                 if current_active_id:
                     try:
-                        import sqlite3
-                        db_path = os.path.join(self.ctx.base_dir or "c:/ameva/AMEVA-STT-Trainer", "db/stt_trainer.db")
+                        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+                        db_path = os.path.join(getattr(self.ctx, 'base_dir', None) or project_root, "db/stt_trainer.db")
                         conn = sqlite3.connect(db_path)
                         cursor = conn.cursor()
                         cursor.execute("SELECT tsk_nm FROM tb_task WHERE id = ?", (current_active_id,))
@@ -140,8 +140,8 @@ class DashboardPresenter:
         if self.pipeline_mode == "RESUME" and not task_id:
             if name:
                 try:
-                    import sqlite3
-                    db_path = os.path.join(self.ctx.base_dir or "c:/ameva/AMEVA-STT-Trainer", "db/stt_trainer.db")
+                    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+                    db_path = os.path.join(getattr(self.ctx, 'base_dir', None) or project_root, "db/stt_trainer.db")
                     conn = sqlite3.connect(db_path)
                     cursor = conn.cursor()
                     cursor.execute("SELECT id FROM tb_task WHERE tsk_nm = ? ORDER BY create_dt DESC LIMIT 1", (name,))
@@ -205,8 +205,8 @@ class DashboardPresenter:
             # 2. 기존 중단 태스크 이어하기(RESUME) 데이터 빌딩 및 업데이트
             if not name and task_id:
                 try:
-                    import sqlite3
-                    db_path = os.path.join(self.ctx.base_dir or "c:/ameva/AMEVA-STT-Trainer", "db/stt_trainer.db")
+                    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+                    db_path = os.path.join(getattr(self.ctx, 'base_dir', None) or project_root, "db/stt_trainer.db")
                     conn = sqlite3.connect(db_path)
                     cursor = conn.cursor()
                     cursor.execute("SELECT tsk_nm FROM tb_task WHERE id = ?", (task_id,))
@@ -314,8 +314,9 @@ class DashboardPresenter:
         if action == "view_report":
             if level == 1:
                 # 1단계 무결성 검수 HTML/MD 열기
+                project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
                 val_report_path = os.path.join(
-                    self.ctx.base_dir or "c:/ameva/AMEVA-STT-Trainer", 
+                    getattr(self.ctx, 'base_dir', None) or project_root, 
                     "dataset", f"{name}_{task_id[:8]}", "validation_report.md"
                 )
                 if os.path.exists(val_report_path):

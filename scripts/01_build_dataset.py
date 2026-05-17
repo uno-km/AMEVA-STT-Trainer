@@ -264,6 +264,14 @@ def main():
         # 2. 오디오 전처리 및 청크 분할
         logger.set_status("오디오 전처리 중", "병렬 처리 및 자막 병합")
         all_entries = []
+        
+        # 글로벌 파이프라인 이벤트 카운터 초기화
+        from src.data.processor import PIPELINE_COUNTERS
+        PIPELINE_COUNTERS["invalid_timestamp_skip"] = 0
+        PIPELINE_COUNTERS["overlap_clamp_count"] = 0
+        PIPELINE_COUNTERS["post_clamp_skip"] = 0
+        PIPELINE_COUNTERS["too_short_chunk_drop"] = 0
+
         for i, (vid, date_str, a_path, v_path) in enumerate(video_list):
             if not a_path or not v_path: continue
             logger.set_status("오디오 전처리 중", f"[{i+1}/{len(video_list)}] {vid} 분할 중")

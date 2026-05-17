@@ -1,8 +1,8 @@
 import sys
 import os
 
-# Add project root to sys.path if not there
-project_root = r"c:\ameva\AMEVA-STT-Trainer"
+# 현재 파일 위치(src/frontend/client/api_client.py) 기준 3단계 상위 폴더를 루트로 동적 계산
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 

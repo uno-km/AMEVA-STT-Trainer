@@ -10,7 +10,8 @@ class TaskManager:
     시퀀셜 워크플로우(Next Step)를 관리하는 엔진.
     """
     def __init__(self):
-        self.base_dir = r"c:\ameva\AMEVA-STT-Trainer"
+        # 현재 파일 위치(src/backend/core/task_manager.py) 기준 3단계 상위 폴더를 루트로 동적 계산
+        self.base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
         self.active_processes = {} # 실행 중인 프로세스 추적용
 
     def init_data(self, name, step_limit=1, step1_params=None, step2_params=None, step3_params=None):

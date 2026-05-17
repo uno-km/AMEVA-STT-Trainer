@@ -15,7 +15,8 @@ class DatabaseManager:
     - 기존 API 및 백엔드 스크립트와의 100% 하위 호환성을 위한 파사드(Facade) 인터페이스 제공.
     """
     def __init__(self, db_path="db/stt_trainer.db"):
-        self.base_dir = r"c:\ameva\AMEVA-STT-Trainer"
+        # 현재 파일 위치(src/backend/core/database.py) 기준 3단계 상위 폴더를 루트로 동적 계산
+        self.base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
         self.db_path = os.path.join(self.base_dir, db_path)
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         self._init_db()

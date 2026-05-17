@@ -73,8 +73,9 @@ def scan_directory(base_path):
 
 @router.get("/api/v1/pipeline/records")
 def get_past_records():
-    """과거 학습 결과(outputs) 목록을 반환합니다."""
-    outputs_dir = r"c:\ameva\AMEVA-STT-Trainer\outputs"
+    # 현재 파일 위치(src/backend/api/pipeline_api.py) 기준 3단계 상위 폴더를 루트로 동적 계산
+    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+    outputs_dir = os.path.join(base_dir, "outputs")
     return {"records": scan_directory(outputs_dir)}
 
 @router.get("/api/v1/tasks/logs")
@@ -166,8 +167,8 @@ def get_task_report(task_id: str = None):
 
 @router.get("/api/v1/files/explorer")
 def get_files_explorer():
-    """학습 결과물, 로그 파일, 전처리 대상 파일 등을 재귀적으로 반환합니다."""
-    base_dir = r"c:\ameva\AMEVA-STT-Trainer"
+    # 현재 파일 위치(src/backend/api/pipeline_api.py) 기준 3단계 상위 폴더를 루트로 동적 계산
+    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
     
     return {
         "dataset": scan_directory(os.path.join(base_dir, "dataset")),

@@ -1,4 +1,8 @@
-# Core AI / Training
+# ======================================================================
+# AMEVA-STT-Trainer Production Dependencies Specification
+# ======================================================================
+
+# Core AI / Training / Fine-tuning
 torch
 torchaudio
 transformers
@@ -8,16 +12,17 @@ accelerate
 evaluate
 jiwer
 
-# Audio
+# Audio Acquisition & Preprocessing
 librosa
 soundfile
 pydub
+scipy
 
-# Data Acquisition
+# Data Collection & Subtitle Alignment
 yt-dlp
 webvtt-py
 
-# Utilities
+# MLOps Telemetry & Task Orchestration
 pandas
 pyyaml
 tqdm
@@ -27,14 +32,14 @@ psutil
 win10toast
 wandb
 
-# GGUF Conversion
+# Whisper.cpp Integration & GGUF Quantization
 sentencepiece
 numpy
-# Database (Built-in SQLite used for Task/Log management)
-# sqlite3
+gguf
+
+# UI Architecture Facade
 PyQt6
 
-
-# Word Reporting & Charts
+# MLOps High-Fidelity Word Reporting & Charts
 python-docx
 matplotlib

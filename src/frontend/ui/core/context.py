@@ -19,6 +19,10 @@ class UIContext(QtCore.QObject):
         
         self.api = api_client
         
+        # 현재 파일 위치(src/frontend/ui/core/context.py) 기준 4단계 상위 폴더를 루트로 동적 계산
+        import os
+        self.base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
+        
         # 디자인 테마 바인딩
         self.theme = {
             "bg_main": "#1e1e2e",

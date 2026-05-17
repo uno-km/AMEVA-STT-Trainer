@@ -45,7 +45,9 @@ class LogViewer(QWidget):
         self.ctx = ctx
         self.task_id = task_id
         self.task_name = task_name
-        self.db_path = r"c:\ameva\AMEVA-STT-Trainer\db\stt_trainer.db"
+        # 현재 파일 위치(src/frontend/ui/components/viewers.py) 기준 4단계 상위 폴더를 루트로 동적 계산
+        base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
+        self.db_path = os.path.join(base_dir, "db", "stt_trainer.db")
         self.init_ui()
         self.reload_logs()
 
@@ -140,4 +142,53 @@ class LogViewer(QWidget):
         self.console.setPlainText(log_content)
         # 콘솔을 즉각 가장 최신 로그가 기록된 최하단(Autoscroll)으로 스크롤 이동
         self.console.verticalScrollBar().setValue(self.console.verticalScrollBar().maximum())
+
+
+class TextFileViewer(QWidget):
+    """일반 텍스트 및 마크다운(.txt, .log, .md, .yaml 등) 파일을 탭에서 읽기 전용으로 시각화해 주는 컴포넌트"""
+    def __init__(self, ctx, file_path):
+        super().__init__()
+        self.ctx = ctx
+        self.file_path = file_path
+        self.init_ui()
+        self.load_file()
+
+    def init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(5)
+
+        # 상단 경로 표시 바
+        top_bar = QHBoxLayout()
+        lbl_icon = QLabel("📄")
+        lbl_path = QLabel(os.path.basename(self.file_path))
+        lbl_path.setStyleSheet(f"font-weight: bold; font-size: 11px; color: {self.ctx.get_color('accent')};")
+        top_bar.addWidget(lbl_icon)
+        top_bar.addWidget(lbl_path)
+        top_bar.addStretch()
+        layout.addLayout(top_bar)
+
+        self.console = QPlainTextEdit()
+        self.console.setReadOnly(True)
+        self.console.setStyleSheet(f"""
+            QPlainTextEdit {{
+                background-color: {self.ctx.get_color('bg_dark')};
+                color: #eaeaea;
+                border: 1px solid {self.ctx.get_color('border')};
+                border-radius: 8px;
+                font-family: 'Consolas', 'Courier New', monospace;
+                font-size: 11px;
+                line-height: 1.4;
+                padding: 10px;
+            }}
+        """)
+        layout.addWidget(self.console, 1)
+
+    def load_file(self):
+        try:
+            with open(self.file_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            self.console.setPlainText(content)
+        except Exception as e:
+            self.console.setPlainText(f"[Error Loading File] {e}")
 

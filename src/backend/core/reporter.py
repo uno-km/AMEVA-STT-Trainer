@@ -8,7 +8,11 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from src.backend.core.database import db_manager
 
 class ReportGenerator:
-    def __init__(self, output_dir=r"c:\ameva\AMEVA-STT-Trainer\outputs\reports"):
+    def __init__(self, output_dir=None):
+        if output_dir is None:
+            # 현재 파일 위치(src/backend/core/reporter.py) 기준 3단계 상위 폴더를 루트로 동적 계산
+            base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+            output_dir = os.path.join(base_dir, "outputs", "reports")
         self.output_dir = output_dir
         os.makedirs(self.output_dir, exist_ok=True)
 
@@ -67,7 +71,9 @@ class ReportGenerator:
         # 2. 체크포인트(Checkpoints) 개수 정밀 산출
         checkpoint_count = 0
         try:
-            outputs_dir = r"c:\ameva\AMEVA-STT-Trainer\outputs"
+            # 현재 파일 위치(src/backend/core/reporter.py) 기준 3단계 상위 폴더를 루트로 동적 계산
+            base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+            outputs_dir = os.path.join(base_dir, "outputs")
             if os.path.exists(outputs_dir):
                 # outputs 폴더 내부의 checkpoint로 시작하는 폴더 개수 스캔
                 folders = [f for f in os.listdir(outputs_dir) if "checkpoint" in f.lower() and os.path.isdir(os.path.join(outputs_dir, f))]
