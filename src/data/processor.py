@@ -53,33 +53,39 @@ def clean_text(text: str, for_training: bool = True) -> str:
 
 def get_new_only(old_text: str, new_text: str) -> str:
     """
-    old_text와 new_text 사이의 중복을 제거하고, new_text에서 새롭게 추가된 부분만 반환한다.
-    공백 차이에 민감하지 않게 동작하여 텍스트 깨짐을 방지한다.
+    old_text와 new_text 사이의 중복을 완벽히 제거하고, new_text에서 새롭게 추가된 고유 부분만 반환한다.
+    유니코드 NFKC 호환성 정규화 및 최소 오버랩 기준(MIN_OVERLAP = 6)을 적용하여 기형적 과매칭을 철저하게 방지합니다.
     """
-    def _norm(s): return re.sub(r"\s+", "", str(s))
-    
+    import unicodedata
+    def _norm(s):
+        # NFKC 정규화로 전각 기호(％, ＄) 및 호환 문자까지 완벽 통일
+        s = unicodedata.normalize('NFKC', str(s or ""))
+        return "".join(c for c in s if c.isalnum()).lower()
+        
     old_n = _norm(old_text)
     new_n = _norm(new_text)
     
     if not new_n: return ""
-    if new_n in old_n: return "" # 이미 포함된 내용이면 빈 문자열
-
-    # 접미사-접두사 오버랩 탐색 (공백 무시하고 글자 수 기준)
+    
+    # 접미사-접두사 오버랩 탐색 (과격한 포함 관계 컷을 배제하고 접미사 매칭을 정교하게 진행)
     match_len = 0
     for i in range(len(new_n), 0, -1):
         if old_n.endswith(new_n[:i]):
             match_len = i
             break
-    
-    if match_len == 0:
-        return new_text # 겹치는 게 없으면 전체 반환
-    
-    # 원본 new_text에서 match_len만큼의 '글자(공백 제외)'를 건너뛰고 남은 부분 반환
-    skipped_chars = 0
+            
+    # 최소 오버랩 길이 가드 (6글자 미만의 사소한 조사 겹침 등으로 인한 단어 잘림 방지)
+    MIN_OVERLAP = 6
+    if match_len < MIN_OVERLAP:
+        return new_text
+        
+    # 원본 new_text에서 match_len만큼의 '유효 알파뉴머릭 문자'를 건너뛰고 남은 부분 정확히 반환
+    matched_chars = 0
     for idx, char in enumerate(new_text):
-        if not char.isspace():
-            skipped_chars += 1
-        if skipped_chars == match_len:
+        char_norm = unicodedata.normalize('NFKC', char)
+        if char_norm.isalnum():
+            matched_chars += 1
+        if matched_chars == match_len:
             return new_text[idx+1:].strip()
             
     return ""
@@ -156,6 +162,12 @@ def process_video(
         chunk_rel = os.path.join(y, m, d, video_id, "chunks", chunk_filename)
         
         sliced = slice_audio(audio, start_ms, end_ms)
+        
+        # [고도화] 오디오 트리밍(trim_silence)을 먼저 수행하여 절대 노이즈 플로어를 유지한 채 잘라내고,
+        # 잘린 최종 음성 파형에 대해 Peak Normalization(normalize_audio)을 가동하여 노이즈 증폭 문제를 원천 방지함!
+        sliced = trim_silence(sliced)
+        sliced = normalize_audio(sliced)
+        
         if export_chunk(sliced, chunk_abs):
             entries.append({
                 "file_name": chunk_rel, 
@@ -166,14 +178,41 @@ def process_video(
 
     for cap in captions:
         start_ms, end_ms, text, text_cln = cap["start_ms"], cap["end_ms"], cap["text"], cap["text_clean"]
+        
+        # [고도화] 1단계: 원본 자막 자체가 이미 깨진 데이터(역전/길이 0)인 경우 원천 스킵
+        if end_ms <= start_ms:
+            continue
+            
+        # 2단계: 자막 타임라인 겹침 보정 (이전 캡션 범위 내에 속할 때만 clamp 하되, clamp 후 음수 슬라이스 방지 가드 탑재)
+        if cur_start_ms != -1 and start_ms < cur_end_ms:
+            start_ms = cur_end_ms
+            if end_ms <= start_ms:
+                continue
+        
         if cur_start_ms == -1:
             cur_start_ms, cur_text, cur_text_clean, cur_end_ms = start_ms, text, text_cln, end_ms
             continue
 
         duration = end_ms - cur_start_ms
-        is_sentence_end = bool(re.search(r"(다|요|죠|니|까)\.?$", cur_text.strip())) or cur_text.strip().endswith((".", "?", "!"))
         
-        if duration > max_dur or (duration > 15000 and is_sentence_end):
+        # [고도화] 3단계: 겹침 보정 이전의 오리지널 타임스탬프로 정확한 캡션 스트림 침묵 갭(Silence Gap) 스캔
+        caption_gap_ms = cap["start_ms"] - cur_end_ms
+        is_silence_gap = caption_gap_ms > 1500
+        
+        # 2. 고도화된 한국어 종결 및 인용부호 닫힘 문맥 경계(Sentence Boundary) 감지
+        is_sentence_end = bool(re.search(r"(다|요|죠|니|까)[\.\?\!\s]*[\'\"\]\)]*$", cur_text.strip())) or cur_text.strip().endswith((".", "?", "!"))
+        
+        # 3. 복합 하이브리드 청킹 판단 트리거
+        # (A) Whisper 최대 인코더 윈도우 한계인 30초에 도달했을 때 (max_dur)
+        # (B) 10초 이상의 유효 발화가 채워진 상태에서 1.5초 이상의 대화 공백이 탐지되어 단락이 전환될 때
+        # (C) 15초 이상의 유효 발화가 채워진 상태에서 문장 종결 어미가 완성되어 문맥이 끊어지지 않게 마감될 때
+        should_flush = (
+            duration > max_dur or 
+            (duration > 10000 and is_silence_gap) or 
+            (duration > 15000 and is_sentence_end)
+        )
+        
+        if should_flush:
             _flush(cur_start_ms, cur_end_ms, cur_text, cur_text_clean)
             cur_start_ms, cur_text, cur_text_clean, cur_end_ms = start_ms, text, text_cln, end_ms
         else:

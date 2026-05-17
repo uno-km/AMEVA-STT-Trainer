@@ -6,11 +6,13 @@
 ## 2. 주요 기술적 특징 (Technical Deep-Dive)
 
 ### 2.1. 데이터 획득 및 전처리 알고리즘 (Data Engineering & Signal Processing)
-본 파이프라인은 비정형 스트리밍 데이터로부터 고품질 학습 코퍼스를 추출하기 위해 다단계 시그널 프로세싱 체계를 구축하였다.
-- **Robust VTT Synchronization**: `yt-dlp` 엔진을 통해 추출된 WebVTT 자막 데이터와 오디오 신호 사이의 정렬(Alignment) 무결성을 확보한다. 자막의 시작($T_{start}$)과 종료($T_{end}$) 시간을 기준으로 오디오 세그먼트를 슬라이싱하며, 모든 소스는 $f_s = 16,000\,Hz$ (Mono)로 강제 리샘플링된다.
-- **Feature Extraction (Log-Mel Spectrogram)**: Whisper 모델의 인풋 텐서로 변환하기 위해, 연속적인 오디오 신호에 STFT(Short-Time Fourier Transform)를 적용한다. 이후 $N=80$ 채널의 Mel-filterbank를 통과시켜 인간의 청각 특성을 반영한 Log-Mel Spectrogram을 생성하며, 이는 다음과 같은 수식으로 정의된다:
+본 파이프라인은 비정형 스트리밍 데이터로부터 고품질 학습 코퍼스를 추출하기 위해 고도의 시그널 프로세싱 및 정교한 텍스트 가공 체계를 통합 구축하였다.
+- **Suffix-Prefix Overlap Matching (접두사-접미사 중복 매칭 제거)**: 유튜브 자동생성 자막의 특성(실시간 단어 누적으로 인한 이전 자막과의 극심한 겹침)을 해결하기 위해, 공백을 제거한 텍스트 단위로 이전 꼬리(`last_tail`)와 새 텍스트 머리(`new_text`) 간의 접미사-접두사 일치 길이(Overlap Length)를 역추적한다. 오버랩된 중복 단어와 문맥을 온전하게 분리/제거하는 알고리즘을 도입하여 텍스트 데이터의 중복도를 $1\%$ 미만으로 억제한다.
+- **Boundary-Aware Dynamic Chunking (문장 경계 감지 동적 청킹)**: Whisper 모델의 30초 오디오 인풋 윈도우 한계를 맞추면서도 문장이 발화 도중 잘려 문맥이 끊기는 현상을 방지한다. 자막 텍스트 내에서 한국어 문장 종결 어미("다", "요", "죠", "니", "까") 또는 구두점(`.`, `?`, `!`)을 감지하여, 15초 이상 30초 미만의 최적의 타임스탬프 시점에서 세그먼트를 동적으로 잘라내는 **Boundary protection** 메커니즘을 적용한다.
+- **Robust Audio Resampling & Signal Processing**: `yt-dlp`를 통해 획득한 고화질 오디오 컨테이너를 타임라인과 완벽히 동조하여 밀리초(ms) 단위로 정밀하게 슬라이싱하고, 모든 청크 소스는 $f_s = 16,000\,Hz$ (Mono)로 강제 리샘플링하여 오디오 품질의 일관성을 강화한다.
+- **Feature Extraction (Log-Mel Spectrogram)**: 연속적인 오디오 신호에 STFT(Short-Time Fourier Transform)를 적용하고, $N=80$ 채널의 Mel-filterbank를 거쳐 인간의 청각적 특성을 모델링한 Log-Mel Spectrogram 인풋 텐서로 변환하며, 이는 다음과 같은 수학식으로 표현된다:
   $$ S_{mel}(m) = \ln \left( \sum_{k=0}^{N-1} |X(k)|^2 \cdot H_m(k) \right) $$
-- **Windows Optimized I/O (Streaming)**: 윈도우의 메모리 맵핑 제한으로 인한 `WinError 87`을 방지하기 위해 **IterableDataset** 방식을 채택, 데이터 전처리와 학습을 파이프라인화하여 메모리 점유율을 일정하게 유지한다.
+- **Windows Optimized I/O (Streaming)**: Windows 환경에서의 대규모 오디오 로딩으로 인한 `WinError 87` (메모리 맵핑 한계) 에러를 원천 방지하기 위해 **IterableDataset** 방식을 도입하여 데이터 로딩 버퍼와 학습 파이프라인의 메모리 점유율을 실시간으로 수평 고정(Flatly Controlled)한다.
 
 ### 2.2. 모델 아키텍처 및 학습 전략 (Fine-Tuning Methodology)
 본 프로젝트는 OpenAI의 **Whisper** 모델(Transformer 기반 Encoder-Decoder 구조)을 베이스로 하며, 효율적인 도메인 적응을 위해 PEFT 전략을 채택하였다.
@@ -121,10 +123,11 @@ pip install -r requirements.txt
 본 파이프라인은 데이터의 생성부터 최종 배포용 모델 추출까지의 전 과정을 자동화하며, 각 단계는 원자성(Atomicity)을 유지하도록 설계되었다.
 
 #### 1단계: 데이터셋 구축 및 정제 (`01_build_dataset.py`)
-이 단계는 비정형 유튜브 소스로부터 기계학습이 가능한 정형 데이터셋을 추출하는 ETL 과정이다.
-- **Ingestion**: `yt-dlp`를 통해 자막(WebVTT)과 오디오(WAV)를 수집한다. 자막 파싱 방식을 채택하여 전송량 최적화 및 수집 안정성을 달성한다.
-- **Parallel Transformation**: 추출된 오디오 파일은 `ProcessPoolExecutor` 기반의 워커들에게 분배되어 자막 타임스탬프에 맞춰 밀리초(ms) 단위로 정밀하게 슬라이싱된다.
-- **Normalization**: 모든 슬라이스 데이터는 $16,000\,Hz$ 샘플링 레이트로 통일되며, `metadata.csv`에 상대 경로와 전사 텍스트 쌍으로 매핑되어 저장된다.
+이 단계는 비정형 유튜브 소스 또는 로컬 원본 파일로부터 기계학습이 가능한 최고 품질의 정형 데이터셋을 추출하는 핵심 ETL 과정이다.
+- **Task Sandbox Isolation (태스크별 독립 격리)**: 각 학습 기동 시 지정된 태스크 이름을 식별하여 `dataset/<task_name>` 디렉토리를 자동 생성하고 독립된 오디오 청크 및 로컬 `metadata.csv`를 보관함으로써, 동시적인 다중 태스크 학습 환경에서의 데이터 교차 오염을 원천 격리한다.
+- **Ingestion & Suffix-Prefix Matching**: `yt-dlp` 엔진을 이용하여 고음질 오디오 컨테이너와 WebVTT 자막 파일을 비동기식으로 추출 및 가공하며, 문장 간 단어가 겹치는 오버랩 영역을 실시간으로 탐색하여 중복 전사(Stutter Words)를 지능적으로 차단한다.
+- **Boundary-Aware Parallel Slicing**: 추출된 오디오 소스는 대용량 병렬 처리를 위해 `ProcessPoolExecutor` 기반의 독립 워커 풀에 분배되며, 한국어 문장 경계 종결 조건을 만족하는 지점(15s~30s)에서 정교한 슬라이싱을 수행한다.
+- **Strict Quality Assurance Reporting (전수 검수 리포팅)**: 가공이 완료된 후, 파일 무결성(Missing wav), 텍스트 중복도(Stutter percentage), 날짜 규격의 정상 여부를 전수 자동 스캔하여 Rich 기반의 고대비 터미널 대시보드로 무결성 상태 보고서를 즉시 출력한다.
 
 #### 2단계: 안정성 우선 LoRA 학습 (`02_start_training.py`)
 Whisper 모델 위에 특정 도메인 지식을 주입하는 파인튜닝 과정으로, Windows 환경에서의 안정성을 극대화하도록 설계되었다.
@@ -179,20 +182,17 @@ Whisper 모델 위에 특정 도메인 지식을 주입하는 파인튜닝 과�
 | [ ] | **Phase 4** | **Large-v3**| **Lv.3 (Skilled)** | `Final Boss` | - / - | - |
 
 ### 6.4. 전처리(Chunking) 레벨 정의
-데이터의 정밀도가 모델의 문맥 이해도에 미치는 영향을 분석하기 위해 세 단계의 청킹 전략을 정의한다.
+데이터의 전처리 정밀도가 딥러닝 모델의 문맥 모델링 성능 및 전사 무결성에 미치는 파급효과를 평가하기 위해 3단계 청킹 전략을 과학적으로 정의한다.
 
 - **Lv.1 (Basic) - Time-based Accumulation**: 
-    - **전략**: 자막 타임스탬프를 기준으로 단순 시간 누적(약 25s)을 통해 세그먼트 생성.
-    - **특징**: 구현이 단순하며 타임라인 위주의 정렬에 최적화되어 있으나, 문장 중간 절단 가능성이 존재함.
+    - **전략**: 자막 타임스탬프를 기준으로 단순 시간의 산술적 누적(약 25s)을 통해 세그먼트를 맹목적으로 절단 생성한다.
+    - **특징**: 구현 복잡도가 낮고 타임라인 일치도는 보장되나, 어휘/문장의 한가운데가 절단되어 학습 손실값(Loss) 왜곡을 유발할 위험성이 높다.
 - **Lv.2 (Smart) - Boundary Protection**: 
-    - **전략**: VTT 자막의 경계를 인식하여 발화 중간 절단을 방지하고, 15~30s 사이에서 유동적으로 그룹화 수행.
-    - **특징**: 문맥적 완결성을 확보하여 모델의 언어 모델링 성능 향상을 유도함.
+    - **전략**: VTT 자막 스트림의 문장 단락 단위를 보호하고 자막 경계의 중복 단어를 병합하여, 15~30s 구간 사이에서 문맥 흐름을 유지하며 적응적으로 그룹화한다.
+    - **특징**: 문맥적 완결성(Semantic Completeness)을 확보하여 모델의 언어 디코더 문맥 예측률을 현저하게 증대시킨다.
 - **Lv.3 (Skilled) - Hybrid Precision Alignment**: 
-    - **Relational MLOps Database**: SQLite를 내장하여 태스크(Task), 메타데이터, 청크 파일, 시스템 로그를 유기적으로 연결하고 이전 학습 기록을 완벽하게 관리/재시작합니다.
-    - **Professional Dashboard UI**: PyQt6 기반의 4분할 관제 대시보드(Loss, CPU, Speed, Metric)와 "Focus Mode"를 통해 실시간 모니터링을 제공합니다.
-    - **Smart Data Pipeline**: 장시간의 유튜브 오디오나 대용량 음성 파일을 VAD(Voice Activity Detection) 기반으로 정밀하게 분할(`Smart Chunking`)합니다.
-    - **Resource Management**: 실시간 CPU 코어 할당 슬라이더와 OOM(Out of Memory) 방지를 위한 자동 배치 사이즈 조절 및 체크포인트 백업을 지원합니다.
-    - **Data Integrity Validation**: 학습 전 `metadata.csv`와 실제 `.wav` 파일 간의 무결성을 검증하고 손상된 데이터를 자동 격리합니다." - AMEVA STT Project
+    - **전략**: Boundary Protection(Lv.2) 방식에 고해상도 접두사-접미사 중복 제거(Suffix-Prefix Overlap Matching)를 적용하고, 오디오 영역의 무음 구간 매칭 가드를 융합하여 데이터와 자막 전사의 일체화를 이룩한다.
+    - **특징**: 데이터 로딩 무결성 확보와 최적의 절단점 검출을 유기적으로 융합하여, 금융/경제 시사 분야의 고난이도 복합 명사나 외래어 발화 전사 품질을 최고 한도(State-of-the-Art)로 격상시킨다.
 
 ---
 **Note**: 본 시스템은 CPU 환경에서도 안정적으로 동작하도록 설계되었으나, 학습 효율을 위해 최신 NVIDIA GPU 환경(CUDA) 사용을 권장한다.

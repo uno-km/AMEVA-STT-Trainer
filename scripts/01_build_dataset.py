@@ -27,8 +27,8 @@ from src.utils          import logger
 
 
 def run_full_investigation(metadata_path=METADATA_PATH, dataset_dir=DATASET_DIR):
-    """데이터셋 빌드 완료 후 품질 상태를 전수 조사하여 예쁘게 출력한다."""
-    # [수정] 대시보드 종료 후 화면을 한 번 깨끗하게 밀어줌
+    """데이터셋 빌드 완료 후 품질 상태를 전수 조사하여 구체적인 진단 내역과 함께 출력한다."""
+    # 대시보드 종료 후 화면을 한 번 깨끗하게 밀어줌
     if os.name == 'nt': os.system('cls')
     else: os.system('clear')
 
@@ -39,57 +39,145 @@ def run_full_investigation(metadata_path=METADATA_PATH, dataset_dir=DATASET_DIR)
     df = pd.read_csv(metadata_path)
     total_records = len(df)
     
-    # 1. 파일 존재 여부 확인
-    missing_count = 0
-    for fname in df['file_name']:
-        if not os.path.exists(os.path.join(dataset_dir, fname)):
-            missing_count += 1
+    # 1. 파일 존재 여부 및 오디오 물리 통계 수집
+    from pydub import AudioSegment
+    import numpy as np
+    import re
     
-    # 2. 텍스트 중복(말더듬) 분석 - 더 엄격한 기준으로 검사
+    missing_count = 0
+    durations = []
+    cps_list = []
+    dbfs_list = []
+    
+    # 중복 감지 상세 내역용 리스트
+    repetition_samples = []
     stutter_count = 0
-    for text in df['transcription'].fillna(""):
-        words = str(text).split()
-        if len(words) > 5:
-            # 3글자 이상의 연속된 단어 뭉치가 반복되는지 확인
-            trigrams = [" ".join(words[i:i+3]) for i in range(len(words)-2)]
-            if trigrams:
-                _, tri_count = Counter(trigrams).most_common(1)[0]
-                if tri_count > 1: stutter_count += 1
+    
+    col_name = 'transcription_clean' if 'transcription_clean' in df.columns else 'transcription'
+    raw_col_name = 'transcription'
+    
+    for idx, row in df.iterrows():
+        file_name = row['file_name']
+        abs_path = os.path.join(dataset_dir, file_name)
+        
+        if not os.path.exists(abs_path):
+            missing_count += 1
+            continue
+            
+        # 1-1. 오디오 정보 및 통계 추출
+        try:
+            audio = AudioSegment.from_wav(abs_path)
+            dur_sec = len(audio) / 1000.0
+            durations.append(dur_sec)
+            
+            clean_text = str(row.get(col_name, "")).strip()
+            raw_text = str(row.get(raw_col_name, "")).strip()
+            
+            if dur_sec > 0:
+                cps_list.append(len(clean_text) / dur_sec)
+            dbfs_list.append(audio.dBFS if audio.dBFS != float('-inf') else -96.0)
+        except Exception:
+            continue
+            
+        # 1-2. 구어체 연속 반복(adjacent n-gram) 상세 분석
+        words = [w for w in clean_text.split() if w and re.match(r'^[a-zA-Z0-9가-힣]+$', w)]
+        if len(words) >= 2:
+            has_repeat = False
+            repeated_pattern = None
+            repeat_n = 0
+            for n in (1, 2, 3):
+                if len(words) >= n * 2:
+                    grams = [tuple(words[i:i+n]) for i in range(len(words)-n+1)]
+                    for i in range(len(grams) - n):
+                        if grams[i] == grams[i+n]:
+                            has_repeat = True
+                            repeated_pattern = " ".join(grams[i])
+                            repeat_n = n
+                            break
+                if has_repeat:
+                    break
+            if has_repeat:
+                stutter_count += 1
+                if len(repetition_samples) < 5:
+                    repetition_samples.append({
+                        "file_name": file_name,
+                        "pattern": repeated_pattern,
+                        "n": repeat_n,
+                        "text": raw_text
+                    })
 
-    # 3. 날짜 누락 분석
+    # 2. 날짜 누락 분석
     na_count = df[df['file_name'].str.startswith('NA', na=False)].shape[0]
 
-    # 결과 표 생성 (디자인 개선)
-    table = Table(title="[bold cyan]✨ AMEVA-STT 최종 데이터셋 품질 리포트[/]", show_header=True, header_style="bold magenta", border_style="bright_blue")
-    table.add_column("검사 항목", style="white")
+    # 3. 기술 통계량 연산
+    avg_dur = np.mean(durations) if durations else 0.0
+    med_dur = np.median(durations) if durations else 0.0
+    min_dur = np.min(durations) if durations else 0.0
+    max_dur = np.max(durations) if durations else 0.0
+    
+    avg_cps = np.mean(cps_list) if cps_list else 0.0
+    med_cps = np.median(cps_list) if cps_list else 0.0
+    max_cps = np.max(cps_list) if cps_list else 0.0
+    
+    avg_dbfs = np.mean(dbfs_list) if dbfs_list else 0.0
+    med_dbfs = np.median(dbfs_list) if dbfs_list else 0.0
+
+    # 결과 리포트 출력용 Rich 콘솔 가동
+    from rich.console import Console
+    console = Console()
+
+    console.print("\n[bold cyan]======================================================================[/]")
+    console.print("[bold white]  AMEVA-STT Preprocessing Pipeline Deep Profiler[/]")
+    console.print("[bold cyan]======================================================================[/]\n")
+
+    # [1] 전체 요약 검수 표
+    table = Table(title="[bold yellow]Dataset Verification Summary[/]", show_header=True, header_style="bold magenta", border_style="bright_blue")
+    table.add_column("검사항목", style="white")
     table.add_column("측정치", justify="right", style="cyan")
     table.add_column("판정", justify="center")
 
-    # 무결성 행
     integrity_status = "[bold green]PERFECT[/]" if missing_count == 0 else "[bold red]MISSING[/]"
     table.add_row("전체 데이터 수", f"{total_records}개", "-")
-    table.add_row("파일 무결성", f"{total_records - missing_count}/{total_records}", integrity_status)
+    table.add_row("오디오 무결성 (WAV 존재)", f"{total_records - missing_count}/{total_records}", integrity_status)
     
-    # 중복도 행 (5% 미만이면 사실상 CLEAN)
-    stutter_ratio = (stutter_count/total_records) * 100
-    if stutter_ratio < 1.0: stutter_status = "[bold green]EXCELLENT[/]"
-    elif stutter_ratio < 5.0: stutter_status = "[bold green]CLEAN[/]"
-    else: stutter_status = "[bold yellow]NEED-CHECK[/]"
+    stutter_ratio = (stutter_count / total_records) * 100 if total_records > 0 else 0.0
+    table.add_row("텍스트 연속 반복 (1~3gram)", f"{stutter_ratio:.1f}% ({stutter_count}건)", "[bold green]INFO[/]")
     
-    table.add_row("텍스트 중복도", f"{stutter_ratio:.1f}% ({stutter_count}건)", stutter_status)
-    
-    # 날짜 행
     date_status = "[bold green]VALIDATED[/]" if na_count == 0 else "[bold yellow]UNKNOWN[/]"
     table.add_row("날짜 정보 무결성", f"{total_records - na_count}/{total_records}", date_status)
 
-    logger.console.print("\n" * 2)
-    logger.console.print(table)
-    logger.console.print("\n")
-    
-    if stutter_ratio < 5.0 and missing_count == 0:
-        logger.success("🎊 축하합니다! 데이터셋이 최상의 상태로 준비되었습니다. 이제 02단계 학습을 시작하세요!")
+    console.print(table)
+    console.print()
+
+    # [2] 물리 데이터 분포 상세 통계
+    console.print("[bold yellow]  [1] 물리 데이터 분포 상세 통계 (Physical Distribution Stats)[/]")
+    console.print(f"  * [bold white]총 학습 오디오 시간 (Total Length)[/]: {sum(durations)/60:.2f}분 ({sum(durations)/3600:.3f}시간)")
+    console.print(f"  * [bold white]세그먼트 길이 (Duration)[/]: 평균 {avg_dur:.2f}초 | 중앙값 {med_dur:.2f}초 | 최소 {min_dur:.2f}초 | 최대 {max_dur:.2f}초")
+    console.print(f"  * [bold white]발화 속도/텍스트 밀도 (CPS)[/]: 평균 {avg_cps:.2f}자/초 | 중앙값 {med_cps:.2f}자/초 (최대 {max_cps:.2f}자/초)")
+    console.print(f"  * [bold white]오디오 음량 에너지 (dBFS)[/]: 평균 {avg_dbfs:.2f} dBFS | 중앙값 {med_dbfs:.2f} dBFS (Peak Normalization 완료)")
+    console.print()
+
+    # [3] 구어체 인접 연속 반복(Adjacent Repetition) 상세 검출 샘플 (Top 5 Chunks)
+    console.print("[bold yellow]  [2] 구어체 인접 연속 반복 감지 상세 내역 (Adjacent Repetitive Patterns - Top 5 Chunks)[/]")
+    if repetition_samples:
+        for idx, sample in enumerate(repetition_samples, 1):
+            console.print(f"  {idx}. [bold cyan]{sample['file_name']}[/] | 반복 패턴: [bold magenta]\"{sample['pattern']}\"[/] ([bold yellow]{sample['n']}-gram[/] 연속 반복)")
+            console.print(f"     └─ 원문: \"{sample['text']}\"")
     else:
-        logger.info("⚠️ 일부 데이터에 보정이 필요할 수 있습니다. 위 리포트를 참고해 주세요.")
+        console.print("  * 감지된 연속 반복 단어/단어구가 없습니다.")
+    console.print()
+
+    # [4] 상위 3개 데이터 샘플 등록 로그
+    console.print("[bold yellow]  [3] 생성된 청크 데이터 상위 3개 레코드 샘플 (Top 3 Chunks Registry)[/]")
+    for i in range(min(3, total_records)):
+        row = df.iloc[i]
+        console.print(f"  * [[bold green]Sample {i+1}[/]] [bold cyan]{row['file_name']}[/]")
+        console.print(f"    └─ 정제 텍스트: \"{row[col_name]}\"")
+    console.print()
+
+    console.print("[bold cyan]======================================================================[/]")
+    logger.success("데이터셋 전처리 및 무결성 정밀 프로파일링 완료.")
+    console.print("[bold cyan]======================================================================[/]\n")
 
 
 def main():

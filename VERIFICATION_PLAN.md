@@ -34,3 +34,12 @@
 
 ---
 > **"데이터가 장인정신을 만나면, 인공지능은 예술이 된다."** - AMEVA STT Project
+
+---
+
+### 🛠️ 재현 및 검증 커맨드 (Reproduction Commands)
+* **데이터셋 빌드**: `.\venv\Scripts\python.exe scripts/01_build_dataset.py --folder dataset/2026/05/17 --name test_run_verify`
+* **단위 테스트 실행 (Standard unittest & pytest compatible)**: `.\venv\Scripts\python.exe tests/test_data_integrity.py`
+  * *Note: 테스트 스위트는 표준 `unittest.TestCase` 구조로 작성되어 `python -m pytest tests/test_data_integrity.py`로도 동일한 검증이 가능합니다.*
+* **토큰화 명세 (Tokenization Spec)**: 토큰은 정규식 `[0-9A-Za-z가-힣]+`을 통과하는 요소만 필터링 및 정규화하여 추출되며, 이에 따라 문장부호 및 침묵 마커(`. . .`)는 오탐 연산에서 완전히 격리됩니다.
+
