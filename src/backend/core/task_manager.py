@@ -105,9 +105,20 @@ class TaskManager:
                 with open(log_file_path, "a", encoding="utf-8") as f:
                     f.write(f"--- [AMEVA Engine] 서브프로세스 PID: {process.pid} 가동 시작 ---\n")
                     f.flush()
+                    
+                    # DB에도 가동 시작 기록 강박적 보존
+                    from src.backend.core.database import db_manager
+                    db_manager.add_log("INFO", f"--- [AMEVA Engine] 서브프로세스 PID: {process.pid} 가동 시작 ---", task_id)
+                    
                     for line in process.stdout:
                         f.write(line)
                         f.flush()
+                        
+                        # [로그발생 -> 로그출력 -> 저장] 철벽 실시간 파이프라인 주입!
+                        stripped = line.strip()
+                        if stripped:
+                            db_manager.add_log("INFO", stripped, task_id)
+                            
                     process.wait()
                     
                     # 종료 상태 DB 반영 및 순수 DB 기반 Auto-Chaining

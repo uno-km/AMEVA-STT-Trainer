@@ -1,22 +1,40 @@
 import sqlite3
-import uuid
 import os
 from datetime import datetime
 
+# 신규 리포지토리 도메인 모듈들 임포트
+from src.backend.core.repositories import (
+    TaskRepository, LogRepository, MetricRepository, MetadataRepository
+)
+
 class DatabaseManager:
+    """
+    [DatabaseManager - Facade Shell] 
+    - STT 트레이너 SQLite 데이터베이스 세션 및 커넥션 풀을 관리합니다.
+    - SQL 쿼리 비즈니스 로직은 도메인별 Repository(tasks, logs, metrics, metadata)로 위임합니다.
+    - 기존 API 및 백엔드 스크립트와의 100% 하위 호환성을 위한 파사드(Facade) 인터페이스 제공.
+    """
     def __init__(self, db_path="db/stt_trainer.db"):
         self.base_dir = r"c:\ameva\AMEVA-STT-Trainer"
         self.db_path = os.path.join(self.base_dir, db_path)
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         self._init_db()
+        
+        # --- [도메인별 레포지토리 객체 생성 및 DI 주입] ---
+        self.tasks = TaskRepository(self)
+        self.logs = LogRepository(self)
+        self.metrics = MetricRepository(self)
+        self.metadata = MetadataRepository(self)
 
     def get_connection(self):
+        """SQLite 데이터베이스와의 스레드 안전 커넥션 객체를 생성하여 반환합니다."""
         conn = sqlite3.connect(self.db_path)
-        conn.text_factory = str # SQLite에서 한글(Unicode)을 정확히 처리하도록 설정
+        conn.text_factory = str # 한글 유니코드 크래시 방지 세팅
         conn.row_factory = sqlite3.Row
         return conn
 
     def _init_db(self):
+        """데이터베이스 기동 시 필요한 프리미엄 테이블 규격 및 스키마 일괄 구축 (기존 마이그레이션 호환)"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
             
@@ -38,17 +56,17 @@ class DatabaseManager:
                 )
             ''')
             
-            # 마이그레이션: 기존 테이블에 신규 컬럼이 없다면 추가
+            # 마이그레이션 가드
             try:
                 cursor.execute("ALTER TABLE tb_task ADD COLUMN checkpoint_path TEXT")
             except sqlite3.OperationalError:
-                pass # 이미 존재함
+                pass
             try:
                 cursor.execute("ALTER TABLE tb_task ADD COLUMN pipeline_config TEXT")
             except sqlite3.OperationalError:
-                pass # 이미 존재함
+                pass
             
-            # 1-1. tb_metric: 학습 메트릭(차트용 데이터) 테이블
+            # 2. tb_metric: 성능 지표 테이블
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS tb_metric (
                     metric_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -63,7 +81,7 @@ class DatabaseManager:
                 )
             ''')
             
-            # 2. tb_task_dtl: 상세 워크플로우 테이블
+            # 3. tb_task_dtl: 상세 SOP 단계 제어 테이블
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS tb_task_dtl (
                     dtl_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -77,7 +95,7 @@ class DatabaseManager:
                 )
             ''')
             
-            # 3. tb_metadata: 데이터셋 매핑 테이블
+            # 4. tb_metadata: 수집 오디오 데이터셋 매핑 테이블
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS tb_metadata (
                     meta_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -89,10 +107,9 @@ class DatabaseManager:
                 )
             ''')
             
-            # AUTOINCREMENT 초기값 설정
             cursor.execute("INSERT OR IGNORE INTO sqlite_sequence (name, seq) VALUES ('tb_metadata', 1000000)")
             
-            # 4. tb_chunk: 오디오 조각 매핑 테이블
+            # 5. tb_chunk: 슬라이싱 발화 청크 정보 및 대본 매핑 테이블
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS tb_chunk (
                     chunk_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -104,7 +121,7 @@ class DatabaseManager:
                 )
             ''')
             
-            # 5. tb_log: 로그 테이블
+            # 6. tb_log: 전체 로그 저장소 테이블
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS tb_log (
                     log_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -118,164 +135,47 @@ class DatabaseManager:
             
             conn.commit()
 
-    # --- 로그 및 상태 관리 ---
+    # ==========================================================
+    # --- [하위 호환성 레이어: 기존 메소드 호출을 레포지토리로 투명 포워딩] ---
+    # ==========================================================
+    
     def add_log(self, level: str, message: str, task_id: str = None) -> int:
-        create_dt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                INSERT INTO tb_log (task_id, level, message, create_dt) 
-                VALUES (?, ?, ?, ?)
-            ''', (task_id, level, message, create_dt))
-            conn.commit()
-            return cursor.lastrowid
+        return self.logs.add(level, message, task_id)
 
     def get_logs(self, task_id: str = None, limit: int = 100):
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            if task_id:
-                cursor.execute('SELECT * FROM tb_log WHERE task_id = ? ORDER BY create_dt ASC LIMIT ?', (task_id, limit))
-            else:
-                cursor.execute('SELECT * FROM tb_log ORDER BY create_dt ASC LIMIT ?', (limit,))
-            return [dict(row) for row in cursor.fetchall()]
+        return self.logs.get_all(task_id, limit)
 
-    def update_task_status(self, task_id: str, level: int, status: str, log_msg: str = None, model_path: str = None, report_path: str = None, checkpoint_path: str = None, pipeline_config: str = None):
-        stts_dt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        log_id = None
-        if log_msg:
-            log_id = self.add_log("INFO" if status == "SUCCESS" else "ERROR" if status == "FAILED" else "INFO", log_msg, task_id)
-            
-        with self.get_connection() as conn:
-            sql = "UPDATE tb_task SET level = ?, status = ?, stts_dt = ?"
-            params = [level, status, stts_dt]
-            if log_id:
-                sql += ", log_id = ?"
-                params.append(log_id)
-            if model_path:
-                sql += ", model_path = ?"
-                params.append(model_path)
-            if report_path:
-                sql += ", report_path = ?"
-                params.append(report_path)
-            if checkpoint_path:
-                sql += ", checkpoint_path = ?"
-                params.append(checkpoint_path)
-            if pipeline_config:
-                sql += ", pipeline_config = ?"
-                params.append(pipeline_config)
-            sql += " WHERE id = ?"
-            params.append(task_id)
-            conn.cursor().execute(sql, params)
-            conn.commit()
+    def update_task_status(self, task_id: str, level: int, status: str, log_msg: str = None, 
+                           model_path: str = None, report_path: str = None, 
+                           checkpoint_path: str = None, pipeline_config: str = None):
+        self.tasks.update_status(task_id, level, status, log_msg, model_path, report_path, checkpoint_path, pipeline_config)
 
     def add_metric(self, task_id: str, step: int, loss: float, accuracy: float, cpu_usage: float, speed: float) -> int:
-        create_dt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                INSERT INTO tb_metric (task_id, step, loss, accuracy, cpu_usage, speed, create_dt) 
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (task_id, step, loss, accuracy, cpu_usage, speed, create_dt))
-            conn.commit()
-            return cursor.lastrowid
+        return self.metrics.add(task_id, step, loss, accuracy, cpu_usage, speed)
 
     def get_metrics(self, task_id: str):
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('SELECT * FROM tb_metric WHERE task_id = ? ORDER BY step ASC', (task_id,))
-            return [dict(row) for row in cursor.fetchall()]
+        return self.metrics.get_all(task_id)
 
-    # --- 태스크 관리 ---
     def create_task(self, tsk_nm: str) -> str:
-        task_id = str(uuid.uuid4())
-        create_dt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        with self.get_connection() as conn:
-            conn.execute('INSERT INTO tb_task (id, tsk_nm, create_dt, level, status) VALUES (?, ?, ?, 1, "RUNNING")', 
-                         (task_id, tsk_nm, create_dt))
-            conn.commit()
-        return task_id
+        return self.tasks.create(tsk_nm)
 
     def create_next_version_task(self, base_task_id: str) -> str:
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('SELECT tsk_nm FROM tb_task WHERE id = ?', (base_task_id,))
-            row = cursor.fetchone()
-            if not row: return self.create_task("Unknown_Task")
-            old_name = row['tsk_nm']
-            if "_" in old_name and old_name.split("_")[0].isdigit():
-                version = int(old_name.split("_")[0]) + 1
-                new_name = f"{version}_{'_'.join(old_name.split('_')[1:])}"
-            else:
-                new_name = f"2_{old_name}"
-            return self.create_task(new_name)
+        return self.tasks.create_next_version(base_task_id)
 
     def add_task_dtl(self, task_id: str, step_seq: int, step_name: str, parameters: str, next_step: int = None) -> int:
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('SELECT dtl_id FROM tb_task_dtl WHERE task_id=? AND step_seq=?', (task_id, step_seq))
-            row = cursor.fetchone()
-            if row:
-                cursor.execute('''
-                    UPDATE tb_task_dtl 
-                    SET step_name=?, parameters=?, next_step=?, status='PENDING'
-                    WHERE dtl_id=?
-                ''', (step_name, parameters, next_step, row['dtl_id']))
-                dtl_id = row['dtl_id']
-            else:
-                cursor.execute('''
-                    INSERT INTO tb_task_dtl (task_id, step_seq, step_name, parameters, next_step) 
-                    VALUES (?, ?, ?, ?, ?)
-                ''', (task_id, step_seq, step_name, parameters, next_step))
-                dtl_id = cursor.lastrowid
-            conn.commit()
-            return dtl_id
+        return self.tasks.add_detail(task_id, step_seq, step_name, parameters, next_step)
 
-    # --- 데이터셋/청크 관리 (복구됨) ---
     def create_metadata(self, task_id: str, file_name: str, folder_path: str) -> int:
-        create_dt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                INSERT INTO tb_metadata (task_id, file_name, folder_path, create_dt) 
-                VALUES (?, ?, ?, ?)
-            ''', (task_id, file_name, folder_path, create_dt))
-            conn.commit()
-            return cursor.lastrowid
+        return self.metadata.create(task_id, file_name, folder_path)
 
     def create_chunk(self, meta_id: int, chunk_name: str, chunk_path: str, script: str) -> int:
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                INSERT INTO tb_chunk (meta_id, chunk_name, chunk_path, script) 
-                VALUES (?, ?, ?, ?)
-            ''', (meta_id, chunk_name, chunk_path, script))
-            conn.commit()
-            return cursor.lastrowid
+        return self.metadata.create_chunk(meta_id, chunk_name, chunk_path, script)
 
-    # --- 조회 기능 ---
     def get_all_tasks(self):
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('SELECT * FROM tb_task ORDER BY create_dt DESC')
-            return [dict(row) for row in cursor.fetchall()]
+        return self.tasks.get_all()
 
     def get_task_details(self, task_id: str):
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('SELECT * FROM tb_task WHERE id = ?', (task_id,))
-            task = cursor.fetchone()
-            if not task: return None
-            task_dict = dict(task)
-            # 상세 워크플로우 정보 추가
-            cursor.execute('SELECT * FROM tb_task_dtl WHERE task_id = ? ORDER BY step_seq ASC', (task_id,))
-            task_dict['details'] = [dict(row) for row in cursor.fetchall()]
-            # 메타데이터 및 청크 정보 추가
-            cursor.execute('SELECT * FROM tb_metadata WHERE task_id = ?', (task_id,))
-            metadatas = [dict(row) for row in cursor.fetchall()]
-            for meta in metadatas:
-                cursor.execute('SELECT * FROM tb_chunk WHERE meta_id = ?', (meta['meta_id'],))
-                meta['chunks'] = [dict(row) for row in cursor.fetchall()]
-            task_dict['metadatas'] = metadatas
-            return task_dict
+        return self.tasks.get_details(task_id)
 
+# 글로벌 단일 인스턴스 기동 및 외부 바인딩
 db_manager = DatabaseManager()

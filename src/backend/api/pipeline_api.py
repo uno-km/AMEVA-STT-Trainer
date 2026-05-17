@@ -131,6 +131,13 @@ def restart_task(body: dict):
     pipeline_state.current_task_name = new_task_id
     return {"id": new_task_id, "name": task_info['tsk_nm']}
 
+@router.get("/api/v1/tasks/metrics")
+def get_task_metrics(task_id: str = None):
+    """지정된 태스크의 실시간 DB 메트릭을 반환합니다."""
+    from src.backend.core.database import db_manager
+    if not task_id: return {"metrics": []}
+    return {"metrics": db_manager.get_metrics(task_id)}
+
 @router.get("/api/v1/tasks/report")
 def get_task_report(task_id: str = None):
     from src.backend.core.database import db_manager

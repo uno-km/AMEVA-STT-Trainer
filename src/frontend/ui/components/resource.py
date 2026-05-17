@@ -2,14 +2,15 @@ from src.frontend.ui.core.qt import *
 
 class ResourcePanel(QFrame):
     """
-    AMEVA Premium Resource Monitor (Slim Horizontal Edition)
-    - Real-time CPU, RAM, GPU Usage tracking
-    - Optimized to fit into a single horizontal row for maximum space efficiency
+    AMEVA Premium Resource Monitor (Slim CPU & Core Allocation Edition)
+    - Displays real-time CPU Usage.
+    - Provides a real-time slider to dynamically allocate/restrict CPU cores.
+    - RAM & GPU are removed to prevent redundancy and fix the broken 0.1% indicator.
     """
     def __init__(self, ctx):
         super().__init__()
         self.ctx = ctx
-        self.setFixedHeight(52) # 높이를 52px로 극단적인 슬림화
+        self.setFixedHeight(60) # 60px로 여유롭게 설정
         self.setStyleSheet(f"""
             QFrame {{
                 background-color: {ctx.get_color('bg_panel')};
@@ -33,54 +34,92 @@ class ResourcePanel(QFrame):
                 background-color: {ctx.get_color('accent')};
                 border-radius: 2px;
             }}
+            QSlider::groove:horizontal {{
+                border: none;
+                height: 4px;
+                background: {ctx.get_color('bg_dark')};
+                border-radius: 2px;
+            }}
+            QSlider::handle:horizontal {{
+                background: {ctx.get_color('accent')};
+                border: none;
+                width: 12px;
+                height: 12px;
+                margin: -4px 0;
+                border-radius: 6px;
+            }}
         """)
         
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(10, 4, 10, 4)
-        layout.setSpacing(15)
+        layout.setContentsMargins(12, 6, 12, 6)
+        layout.setSpacing(20)
         
-        # 3열 구성을 위한 헬퍼 함수
-        def create_column(title):
-            col_widget = QWidget()
-            col_widget.setStyleSheet("background: transparent; border: none;")
-            col_layout = QVBoxLayout(col_widget)
-            col_layout.setContentsMargins(0, 0, 0, 0)
-            col_layout.setSpacing(3)
+        # --- Left Column: CPU Usage ---
+        cpu_widget = QWidget()
+        cpu_widget.setStyleSheet("background: transparent; border: none;")
+        cpu_layout = QVBoxLayout(cpu_widget)
+        cpu_layout.setContentsMargins(0, 0, 0, 0)
+        cpu_layout.setSpacing(4)
+        
+        self.cpu_lbl = QLabel("CPU: 0%")
+        self.cpu_bar = QProgressBar()
+        self.cpu_bar.setTextVisible(False)
+        self.cpu_bar.setFixedHeight(4)
+        
+        cpu_layout.addWidget(self.cpu_lbl)
+        cpu_layout.addWidget(self.cpu_bar)
+        layout.addWidget(cpu_widget, 1) # 비율 1
+        
+        # --- Right Column: CPU Core Allocation Slider ---
+        # 앱 기동 시 백엔드에서 사용자 사양에 맞는 코어 정보 최초 조회
+        try:
+            hw = ctx.api.get("/api/v1/hardware/status")
+            self.total_cores = hw.get("total_cores", 8) if hw else 8
+            self.allocated_cores = hw.get("allocated_cores", self.total_cores) if hw else self.total_cores
+        except Exception:
+            self.total_cores = 8
+            self.allocated_cores = 8
             
-            lbl = QLabel(title)
-            bar = QProgressBar()
-            bar.setTextVisible(False) # 바 내부의 난잡한 텍스트 숨김 (레이블에 표시되므로)
-            bar.setFixedHeight(4)
+        affinity_widget = QWidget()
+        affinity_widget.setStyleSheet("background: transparent; border: none;")
+        aff_layout = QVBoxLayout(affinity_widget)
+        aff_layout.setContentsMargins(0, 0, 0, 0)
+        aff_layout.setSpacing(4)
+        
+        self.aff_lbl = QLabel(f"Cores: {self.allocated_cores}/{self.total_cores}")
+        self.aff_slider = QSlider(Qt.Orientation.Horizontal)
+        self.aff_slider.setMinimum(1)
+        self.aff_slider.setMaximum(self.total_cores)
+        self.aff_slider.setValue(self.allocated_cores)
+        self.aff_slider.setFixedHeight(12)
+        
+        # 슬라이더 값 변경 시 실시간 코어 할당 바인딩
+        self.aff_slider.valueChanged.connect(self.on_slider_changed)
+        
+        aff_layout.addWidget(self.aff_lbl)
+        aff_layout.addWidget(self.aff_slider)
+        layout.addWidget(affinity_widget, 1) # 비율 1
+        
+    def on_slider_changed(self, val):
+        """슬라이더 조정 즉시 실시간으로 코어 배분 API 전송"""
+        self.aff_lbl.setText(f"Cores: {val}/{self.total_cores}")
+        try:
+            self.ctx.api.post("/api/v1/hardware/affinity", {"cores": val})
+        except Exception as e:
+            print(f"[Affinity Bind Error] {e}")
             
-            col_layout.addWidget(lbl)
-            col_layout.addWidget(bar)
-            return col_widget, lbl, bar
-
-        # CPU
-        cpu_col, self.cpu_lbl, self.cpu_bar = create_column("CPU: 0%")
-        layout.addWidget(cpu_col)
-        
-        # RAM
-        ram_col, self.ram_lbl, self.ram_bar = create_col = create_column("RAM: 0%")
-        layout.addWidget(ram_col)
-        
-        # GPU
-        gpu_col, self.gpu_lbl, self.gpu_bar = create_column("GPU: 0%")
-        self.gpu_bar.setStyleSheet(f"QProgressBar::chunk {{ background-color: {ctx.get_color('warning')}; }}")
-        layout.addWidget(gpu_col)
-        
     def update_stats(self, res):
-        """API 결과({"cpu": n, "ram": n, "gpu": n})를 화면에 반영"""
+        """실시간 폴링 데이터로 CPU 사용율 갱신"""
         cpu = res.get("cpu", 0)
-        ram = res.get("ram", 0)
-        gpu = res.get("gpu", 0)
-        
         self.cpu_lbl.setText(f"CPU: {cpu:.1f}%")
         self.cpu_bar.setValue(int(cpu))
         
-        self.ram_lbl.setText(f"RAM: {ram:.1f}%")
-        self.ram_bar.setValue(int(ram))
-        
-        self.gpu_lbl.setText(f"GPU: {gpu:.1f}%")
-        self.gpu_bar.setValue(int(gpu))
-
+        # 슬라이더를 직접 사용자가 조절하고 있지 않을 때만, 실시간 할당값 동기화
+        if not self.aff_slider.isSliderDown():
+            try:
+                allocated = res.get("allocated_cores")
+                if allocated is not None:
+                    self.aff_slider.setValue(allocated)
+                    self.aff_lbl.setText(f"Cores: {allocated}/{self.total_cores}")
+            except Exception:
+                pass
