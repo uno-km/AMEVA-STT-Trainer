@@ -63,6 +63,14 @@ def get_past_records():
     outputs_dir = r"c:\ameva\AMEVA-STT-Trainer\outputs"
     return {"records": scan_directory(outputs_dir)}
 
+@router.get("/api/v1/tasks/logs")
+def get_logs(task_id: str = None):
+    if not task_id:
+        return {"logs": "선택된 태스크가 없습니다."}
+    if hasattr(task_manager, 'get_task_logs'):
+        return {"logs": task_manager.get_task_logs(task_id)}
+    return {"logs": "로그 시스템 오류"}
+
 @router.get("/api/v1/tasks/list")
 def list_tasks():
     from src.backend.core.database import db_manager
@@ -70,28 +78,34 @@ def list_tasks():
 
 @router.post("/api/v1/tasks/init_data")
 def init_data(body: dict):
-    name = body.get("name", "Unnamed Task")
+    name = body.get("name", "New Task")
     source_type = body.get("source_type", "youtube")
     url = body.get("url", "")
     count = body.get("count", 5)
     folder = body.get("folder", "")
     
-    # 1단계 시작
-    task_info = task_manager.init_data(name, source_type, url, count, folder)
-    return task_info
+    # 2,3단계 설정값 수집
+    pipeline_config = json.dumps({
+        "max_steps": body.get("max_steps", 100),
+        "auto_export": body.get("auto_export", True),
+        "method": body.get("method", "q4_0")
+    })
+    
+    res = task_manager.init_data(name, source_type, url, count, folder, pipeline_config)
+    return res
 
 @router.post("/api/v1/tasks/start_train")
 def start_train(body: dict):
     task_id = body.get("task_id")
-    if not task_id: return {"error": "Missing task_id"}
-    
-    max_steps = body.get("max_steps", 100)
-    auto_export = body.get("auto_export", True)
-    method = body.get("method", "q4_0")
-    
-    # 2-3단계 가동
-    res = task_manager.start_train(task_id, max_steps, auto_export, method)
-    return res
+    train_params = json.dumps(body)
+    return task_manager.start_train(task_id, train_params)
+
+@router.post("/api/v1/tasks/stop")
+def stop_task(body: dict):
+    task_id = body.get("task_id")
+    if task_id:
+        return task_manager.force_stop_task(task_id)
+    return {"status": "Error", "message": "No task_id provided"}
 
 @router.post("/api/v1/tasks/restart")
 def restart_task(body: dict):
@@ -144,3 +158,20 @@ def get_files_explorer():
         "outputs": scan_directory(os.path.join(base_dir, "outputs")),
         "configs": scan_directory(os.path.join(base_dir, "configs"))
     }
+@router.get("/api/v1/system/resources")
+def get_resources():
+    import psutil
+    try:
+        cpu = psutil.cpu_percent()
+        ram = psutil.virtual_memory().percent
+        # GPU는 옵션 (없을 경우 0)
+        gpu = 0
+        try:
+            import GPUtil
+            gpus = GPUtil.getGPUs()
+            if gpus: gpu = gpus[0].load * 100
+        except: pass
+        
+        return {"cpu": cpu, "ram": ram, "gpu": gpu}
+    except:
+        return {"cpu": 0, "ram": 0, "gpu": 0}

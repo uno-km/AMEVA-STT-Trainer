@@ -35,21 +35,28 @@ class LogPanel(QWidget):
         layout.addWidget(self.view)
 
     def update_logs(self, logs):
+        # 1. 문자열(Raw Text)이 들어온 경우 처리
+        if isinstance(logs, str):
+            self.view.setPlainText(logs)
+            if self.auto_scroll_cb.isChecked():
+                self.view.verticalScrollBar().setValue(self.view.verticalScrollBar().maximum())
+            return
+
+        # 2. 구조화된 로그(List of Dicts) 처리
         log_text = ""
         for i, log in enumerate(logs):
-            # 타임스탬프 (있을 경우 사용, 없으면 현재 시간 모의)
             ts = log.get('timestamp', '00:00:00.000')
             log_id = log.get('id', i + 1)
+            level = log.get('level', 'INFO')
+            message = log.get('message', '')
             
-            level_color = self.ctx.get_color('success') if log['level'] == 'INFO' else self.ctx.get_color('error') if log['level'] == 'ERROR' else self.ctx.get_color('warning')
+            level_color = self.ctx.get_color('success') if level == 'INFO' else self.ctx.get_color('error') if level == 'ERROR' else self.ctx.get_color('warning')
             dim_color = self.ctx.get_color('text_dim')
             
-            # 포맷: [ID] [12:34:56.789] [INFO] 메시지
             meta = f"<span style='color:{dim_color}'>#{log_id:04d} [{ts}]</span>"
-            level = f"<span style='color:{level_color}; font-weight: bold;'> [{log['level']}]</span>"
-            msg = f"<span style='color:{self.ctx.get_color('text')}'> {log['message']}</span>"
-            
-            log_text += f"{meta}{level}{msg}<br>"
+            level_html = f"<span style='color:{level_color}; font-weight: bold;'> [{level}]</span>"
+            msg_html = f"<span style='color:{self.ctx.get_color('text')}'> {message}</span>"
+            log_text += f"{meta}{level_html}{msg_html}<br>"
         
         self.view.setHtml(log_text)
         if self.auto_scroll_cb.isChecked():

@@ -54,7 +54,7 @@ class WhisperQuantizer:
                 subprocess.run(["make", "-C", self.whisper_cpp_dir, "quantize"], check=True)
                 logger.info("✅ quantize 도구 빌드 성공")
             except Exception as e:
-                logger.warning(f"⚠️ 빌드 실패: {e}. 컴파일러(make/gcc) 환경이 필요합니다.")
+                logger.info(f"⚠️ 빌드 실패: {e}. 컴파일러(make/gcc) 환경이 필요합니다.")
         return os.path.exists(self.quantize_bin)
 
     def quantize_existing_bin(self, source_bin: str, final_name: str, method: str = "q4_0"):
@@ -71,7 +71,7 @@ class WhisperQuantizer:
             subprocess.run([self.quantize_bin, source_bin, final_name, method], check=True)
             return final_name
         else:
-            logger.warning("양자화 도구가 준비되지 않았습니다.")
+            logger.info("양자화 도구가 준비되지 않았습니다.")
             return None
 
     def run_post_process(self, merged_model_path: str, final_name: str = "ggml-model-q4_0.bin", skip_quantize: bool = False):
@@ -79,7 +79,6 @@ class WhisperQuantizer:
         병합된 모델 -> GGUF 변환 -> (선택적) 4비트 양자화 과정을 수행한다.
         """
         assets_dir = self.ensure_tool()
-        
         # 1. GGML 포맷으로 변환 (FP16/32)
         logger.info("1단계: GGUF(GGML) 포맷 변환 중...")
         subprocess.run([

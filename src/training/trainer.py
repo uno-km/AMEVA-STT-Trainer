@@ -138,14 +138,30 @@ def dataset_generator(audio_list, transcription_list, model_id, language, task):
 # ---------------------------------------------------------------------------- #
 
 @exception_guard(location="run_training()", reraise=True)
-def run_training(resume_from_checkpoint: str = None) -> None:
+def run_training(resume_from_checkpoint: str = None, task_id: str = None):
     """
-    전체 학습 파이프라인을 총괄하는 메인 함수입니다.
-    데이터 준비부터 모델 로딩, LoRA 적용, 최종 학습 및 저장까지의 전 과정을 제어합니다.
+    학습 파이프라인 전체 공정을 수행한다.
+    - task_id가 제공될 경우, 해당 태스크의 전용 데이터셋 경로를 자동으로 탐색한다.
     """
-    
-    # ---- [1단계] 데이터셋 경로 확보 및 메타데이터 로드 ----
-    # 학습의 재료가 되는 metadata.csv 파일이 있는지 먼저 확인합니다.
+    global METADATA_PATH, DATASET_DIR
+
+    # ---- [1단계] 데이터셋 경로 확인 및 동적 매핑 ----
+    if task_id:
+        from src.backend.core.database import db_manager
+        task = db_manager.get_task_details(task_id)
+        if task:
+            task_nm = task['tsk_nm']
+            # 규칙: dataset/{tsk_nm}_{task_id[:8]}
+            task_dataset_dir = os.path.join("dataset", f"{task_nm}_{task_id[:8]}")
+            task_metadata_path = os.path.join(task_dataset_dir, "metadata.csv")
+            
+            if os.path.exists(task_metadata_path):
+                DATASET_DIR = task_dataset_dir
+                METADATA_PATH = task_metadata_path
+                logger.info(f"[DYNAMIC] 태스크 전용 데이터셋 감지: {DATASET_DIR}")
+            else:
+                logger.warning(f"[WARNING] 태스크 폴더는 있으나 metadata.csv가 없습니다: {task_metadata_path}")
+
     if not os.path.exists(METADATA_PATH):
         raise TrainingError(f"metadata.csv 파일을 찾을 수 없습니다: {METADATA_PATH}")
 

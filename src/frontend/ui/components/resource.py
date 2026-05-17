@@ -1,41 +1,69 @@
 from src.frontend.ui.core.qt import *
 
 class ResourcePanel(QFrame):
-    """좌측 하단에 위치할 슬림한 리소스 모니터링 패널"""
-    def __init__(self):
+    """
+    AMEVA Premium Resource Monitor
+    - Real-time CPU, RAM, GPU Usage tracking
+    - Modern dark aesthetics with progress bars
+    """
+    def __init__(self, ctx):
         super().__init__()
-        self.setStyleSheet("background-color: #181825; border-radius: 8px; padding: 5px;")
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(5, 5, 5, 5)
-        
-        # Info row
-        self.cpu_info_label = QLabel("CPU: --% | RAM: --MB")
-        self.cpu_info_label.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
-        self.cpu_info_label.setStyleSheet("color: #a6e3a1;")
-        layout.addWidget(self.cpu_info_label)
-        
-        # Slider row
-        slider_layout = QHBoxLayout()
-        slider_layout.addWidget(QLabel("Threads:", font=QFont("Segoe UI", 8)))
-        
-        self.slider = QSlider(Qt.Orientation.Horizontal)
-        self.slider.setRange(1, 16)
-        self.slider.setValue(16)
-        self.slider.setStyleSheet("""
-            QSlider::groove:horizontal { border-radius: 2px; height: 4px; background: #313244; }
-            QSlider::handle:horizontal { background: #89b4fa; width: 10px; height: 10px; margin: -3px 0; border-radius: 5px; }
+        self.ctx = ctx
+        self.setFixedWidth(200)
+        self.setStyleSheet(f"""
+            QFrame {{
+                background-color: {ctx.get_color('bg_panel')};
+                border: 1px solid {ctx.get_color('border')};
+                border-radius: 10px;
+                padding: 10px;
+            }}
+            QLabel {{ color: {ctx.get_color('text')}; font-size: 11px; font-weight: bold; border: none; }}
+            QProgressBar {{
+                background-color: {ctx.get_color('bg_dark')};
+                border: none;
+                border-radius: 4px;
+                height: 6px;
+                text-align: center;
+            }}
+            QProgressBar::chunk {{
+                background-color: {ctx.get_color('accent')};
+                border-radius: 4px;
+            }}
         """)
-        slider_layout.addWidget(self.slider)
         
-        self.threads_label = QLabel("16/16")
-        self.threads_label.setFont(QFont("Segoe UI", 8))
-        slider_layout.addWidget(self.threads_label)
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
         
-        layout.addLayout(slider_layout)
-
-    def update_status(self, cpu_pct, mem_mb, allocated, total):
-        self.cpu_info_label.setText(f"CPU: {cpu_pct}% | RAM: {mem_mb:.0f}MB")
-        self.threads_label.setText(f"{allocated}/{total}")
-        if self.slider.maximum() != total:
-            self.slider.setMaximum(total)
-            self.slider.setValue(allocated)
+        # CPU
+        self.cpu_lbl = QLabel("CPU USAGE: 0%")
+        self.cpu_bar = QProgressBar()
+        layout.addWidget(self.cpu_lbl)
+        layout.addWidget(self.cpu_bar)
+        
+        # RAM
+        self.ram_lbl = QLabel("RAM USAGE: 0%")
+        self.ram_bar = QProgressBar()
+        layout.addWidget(self.ram_lbl)
+        layout.addWidget(self.ram_bar)
+        
+        # GPU
+        self.gpu_lbl = QLabel("GPU USAGE: 0%")
+        self.gpu_bar = QProgressBar()
+        self.gpu_bar.setStyleSheet(f"QProgressBar::chunk {{ background-color: {ctx.get_color('warning')}; }}")
+        layout.addWidget(self.gpu_lbl)
+        layout.addWidget(self.gpu_bar)
+        
+    def update_stats(self, res):
+        """API 결과({"cpu": n, "ram": n, "gpu": n})를 화면에 반영"""
+        cpu = res.get("cpu", 0)
+        ram = res.get("ram", 0)
+        gpu = res.get("gpu", 0)
+        
+        self.cpu_lbl.setText(f"CPU USAGE: {cpu:.1f}%")
+        self.cpu_bar.setValue(int(cpu))
+        
+        self.ram_lbl.setText(f"RAM USAGE: {ram:.1f}%")
+        self.ram_bar.setValue(int(ram))
+        
+        self.gpu_lbl.setText(f"GPU USAGE: {gpu:.1f}%")
+        self.gpu_bar.setValue(int(gpu))

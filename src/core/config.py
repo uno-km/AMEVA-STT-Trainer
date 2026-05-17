@@ -15,16 +15,38 @@ import yaml
 # 프로젝트 루트 (이 파일 기준 2단계 상위)
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
-# 학습 데이터 세그먼트(WAV·CSV)가 저장될 최상위 디렉터리
+# --- Dynamic Task-Specific Paths ---
+ACTIVE_TASK_ID = os.environ.get("CURRENT_TASK_ID")
 DATASET_DIR     = os.path.join(ROOT_DIR, "dataset")
-# 전체 오디오-전사 쌍 목록을 담은 CSV 파일 경로
-METADATA_PATH   = os.path.join(DATASET_DIR, "metadata.csv")
-# 학습 결과(어댑터·병합 모델)가 저장될 디렉터리
-OUTPUTS_DIR     = os.path.join(ROOT_DIR, "outputs")
-# LoRA 어댑터 가중치 저장 경로
-LORA_DIR        = os.path.join(OUTPUTS_DIR, "lora_adapter")
-# LoRA 병합 완료 모델 저장 경로
-MERGED_DIR      = os.path.join(OUTPUTS_DIR, "merged_model")
+
+def resolve_paths():
+    global OUTPUTS_DIR, LORA_DIR, MERGED_DIR, METADATA_PATH
+    
+    if ACTIVE_TASK_ID:
+        try:
+            # 순환 참조 방지를 위해 함수 내에서 임포트
+            from src.backend.core.database import db_manager
+            task = db_manager.get_task_details(ACTIVE_TASK_ID)
+            if task:
+                # 01_build_dataset.py 규칙: {name}_{id[:8]}
+                folder_name = f"{task['tsk_nm']}_{ACTIVE_TASK_ID[:8]}"
+                
+                OUTPUTS_DIR = os.path.join(ROOT_DIR, "outputs", ACTIVE_TASK_ID)
+                LORA_DIR    = os.path.join(OUTPUTS_DIR, "lora_adapter")
+                MERGED_DIR  = os.path.join(OUTPUTS_DIR, "merged_model")
+                METADATA_PATH = os.path.join(DATASET_DIR, folder_name, "metadata.csv")
+                return
+        except Exception:
+            pass
+
+    # 기본값 (ID가 없거나 DB 조회 실패 시)
+    OUTPUTS_DIR     = os.path.join(ROOT_DIR, "outputs")
+    LORA_DIR        = os.path.join(OUTPUTS_DIR, "lora_adapter")
+    MERGED_DIR      = os.path.join(OUTPUTS_DIR, "merged_model")
+    METADATA_PATH   = os.path.join(DATASET_DIR, "metadata.csv")
+
+resolve_paths()
+
 # 실행 로그 및 에러 로그가 저장될 디렉터리
 LOG_DIR         = os.path.join(ROOT_DIR, "logs")
 
@@ -54,9 +76,9 @@ DEFAULTS = {
     "task"                   : "transcribe",
     "batch_size"             : 2,            # 배치당 샘플 수 (CPU 환경 최소값)
     "gradient_accumulation"  : 8,            # 실질 배치 크기 = batch_size × gradient_accumulation
-    "learning_rate"          : 1e-3,         # LoRA 어댑터 학습률
-    "max_steps"              : 1000,         # 전체 학습 스텝 수
-    "save_steps"             : 50,           # 체크포인트 저장 주기
+    "learning_rate"          : 1e-4,         # [수정] LoRA 어댑터 학습률 (1e-3은 치명적 망각 유발, 1e-4가 황금비율)
+    "max_steps"              : 400,          # [수정] 전체 학습 스텝 수 (Tiny 모델 기준 과적합 방지)
+    "save_steps"             : 100,          # 체크포인트 저장 주기
     "logging_steps"          : 10,           # 로그 출력 주기
     "warmup_steps"           : 50,           # 학습률 워밍업 스텝 수
     "lora_r"                 : 32,           # LoRA 저차원 랭크(r)
@@ -74,6 +96,34 @@ DEFAULTS = {
         "log_artifacts" : True,
     }
 }
+
+# ---------------------------------------------------------------------------- #
+#  모델 체급별 파인튜닝 황금 비율 레시피 (동적 전환용)                              #
+# ---------------------------------------------------------------------------- #
+
+MODEL_DEFAULTS = {
+    "openai/whisper-tiny": {
+        "description"            : "파라미터 39M. CPU 환경 최적화. 가볍고 빠른 도메인 학습에 적합.",
+        "learning_rate"          : 1e-4,    # LoRA 학습 효율을 위한 상향 (1e-4 권장)
+        "max_steps"              : 400,     # 300~600 스텝 사이 권장
+        "batch_size"             : 2,
+        "gradient_accumulation"  : 4,       # CPU 연산 속도 고려 (실질 배치 8)
+        "warmup_steps"           : 50,
+        "lora_r"                 : 16,      # CPU 부담 경감을 위한 R16
+        "lora_alpha"             : 32,
+    },
+    "openai/whisper-small": {
+        "description"            : "파라미터 244M. CPU 환경 최적화. LoRA를 통한 고효율 중상급 파인튜닝.",
+        "learning_rate"          : 1e-4,    # LoRA + CPU 환경 권장 학습률
+        "max_steps"              : 800,     # 중상급 성능을 위한 현실적 타협점
+        "batch_size"             : 1,
+        "gradient_accumulation"  : 8,       # CPU 연산 속도와 배치의 최적 타협 (실질 배치 8)
+        "warmup_steps"           : 80,
+        "lora_r"                 : 16,      # CPU 연산 부담 경감
+        "lora_alpha"             : 32,
+    }
+}
+
 
 
 # ---------------------------------------------------------------------------- #

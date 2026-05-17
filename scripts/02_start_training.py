@@ -86,6 +86,7 @@ def check_resources(skip_confirm: bool = False) -> bool:
 
 def main():
     parser = argparse.ArgumentParser(description="AMEVA-STT Training Script")
+    parser.add_argument("--task-id", type=str, default=None, help="학습을 진행할 태스크 ID")
     parser.add_argument("--skip", action="store_true", help="기존 데이터셋 생성을 건너뛰고 학습만 시작")
     parser.add_argument("--resume_from_checkpoint", type=str, default=None, help="학습을 재개할 체크포인트 경로")
     args = parser.parse_args()
@@ -112,31 +113,26 @@ def main():
         logger.info(f"[WandB] '{CFG['wandb']['project']}' 프로젝트로 로그 전송 시작 (Mode: {CFG['wandb']['mode']})")
 
     # 3. 학습 실행
-    task_id = os.environ.get("CURRENT_TASK_ID") 
+    task_id = args.task_id if args.task_id else os.environ.get("CURRENT_TASK_ID")
     env_steps = os.environ.get("TRAIN_MAX_STEPS")
     if env_steps:
         logger.info(f"[Workflow] Max Steps override: {env_steps}")
         CFG["max_steps"] = int(env_steps) # 환경변수 값이 있으면 10스텝으로 고정
 
+    if task_id:
+        logger.info(f"[Training] Task ID: {task_id} 학습을 시작합니다.")
+
     from src.backend.core.database import db_manager
 
     try:
-        run_training(resume_from_checkpoint=args.resume_from_checkpoint)
-        
-        # 학습 성공 시 DB 업데이트 (Level 2: 학습 완료)
-        if task_id:
-            db_manager.update_task_status(task_id, level=2, status="SUCCESS", log_msg="Step 2 (Training) completed successfully.")
-            logger.info(f"Task {task_id} status updated to Level 2 SUCCESS.")
-            
-            # --- [핵심] 다음 단계(Next Step) 자동 실행 트리거 ---
-            from src.backend.core.task_manager import task_manager
-            task_manager.trigger_next_step(task_id)
-            
+        run_training(
+            resume_from_checkpoint=args.resume_from_checkpoint,
+            task_id=task_id
+        )
     except Exception as e:
         logger.error(f"학습 도중 오류 발생: {e}")
-        if task_id:
-            db_manager.update_task_status(task_id, level=2, status="FAILED", log_msg=f"Training failed: {e}")
-    finally:
+        import sys
+        sys.exit(1) # 에러 시 Exit Code 1 반환 (TaskManager가 감지)
         if CFG["wandb"]["enabled"]:
             import wandb
             wandb.finish()

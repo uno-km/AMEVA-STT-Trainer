@@ -100,14 +100,25 @@ def main():
     parser.add_argument("--url", type=str, default="")
     parser.add_argument("--count", type=int, default=5)
     parser.add_argument("--folder", type=str, default="")
+    parser.add_argument("--name", type=str, help="태스크 전용 폴더명")
     args = parser.parse_args()
 
     task_id = args.task_id or os.environ.get("CURRENT_TASK_ID")
+    
+    # [핵심] 태스크 전용 경로 설정 (데이터 격리)
+    if args.name:
+        target_dir = os.path.abspath(os.path.join("dataset", args.name))
+        os.makedirs(target_dir, exist_ok=True)
+        local_metadata_path = os.path.join(target_dir, "metadata.csv")
+    else:
+        target_dir = DATASET_DIR
+        local_metadata_path = METADATA_PATH
 
     # 실시간 대시보드 화면 활성화
     with logger.dashboard_context():
         logger.info("=" * 50)
         logger.info(f"[1단계] 데이터셋 빌드 시작 (태스크: {task_id})")
+        logger.info(f"출력 경로: {target_dir}")
         logger.info("=" * 50)
 
         # 1. 데이터 수집 (유튜브 혹은 폴더)
@@ -120,10 +131,7 @@ def main():
 
         if not video_list:
             logger.warning("수집된 영상이 없습니다.")
-            if task_id:
-                from src.backend.core.database import db_manager
-                db_manager.update_task_status(task_id, level=1, status="FAILED", log_msg="No videos scraped.")
-            return
+            sys.exit(1)
 
         # 2. 오디오 전처리 및 청크 분할
         logger.set_status("오디오 전처리 중", "병렬 처리 및 자막 병합")
@@ -131,39 +139,25 @@ def main():
         for i, (vid, date_str, a_path, v_path) in enumerate(video_list):
             if not a_path or not v_path: continue
             logger.set_status("오디오 전처리 중", f"[{i+1}/{len(video_list)}] {vid} 분할 중")
-            entries = process_video(vid, date_str, a_path, v_path, mode=args.mode)
+            # [수정] target_dir을 넘겨서 해당 폴더에 청크 저장
+            entries = process_video(vid, date_str, a_path, v_path, mode=args.mode, output_dir=target_dir)
             all_entries.extend(entries)
-
-        # 3. metadata.csv 저장
+        # 3. metadata.csv 저장 (격리된 폴더에 저장)
         if all_entries:
             df = pd.DataFrame(all_entries)
-            df.to_csv(METADATA_PATH, index=False, encoding="utf-8-sig")
-            logger.info(f"메타데이터 저장 완료: {len(df)}개 레코드")
+            df.to_csv(local_metadata_path, index=False, encoding="utf-8-sig")
+            logger.info(f"메타데이터 저장 완료: {len(df)}개 레코드 -> {local_metadata_path}")
 
             # 4. 데이터셋 검수
             logger.set_status("검수 중", "데이터 무결성 검증")
-            validate_dataset()
+            validate_dataset(metadata_path=local_metadata_path, dataset_dir=target_dir)
             
-            # [추가] DB 업데이트 및 다음 단계(학습) 트리거
-            if task_id:
-                from src.backend.core.database import db_manager
-                from src.backend.core.task_manager import task_manager
-                db_manager.update_task_status(task_id, level=1, status="SUCCESS", log_msg="Step 1 (Data Prep) completed.")
-                logger.info(f"Task {task_id} status updated. Triggering next step...")
-                task_manager.trigger_next_step(task_id)
+            # 리포트 출력 (격리된 경로 기준)
+            run_full_investigation(local_metadata_path, target_dir)
+            logger.success(f"--- [1단계 완료] 태스크 {task_id} 데이터셋 구축 성공 ---")
         else:
-            logger.error("생성된 데이터셋 레코드가 없습니다.")
-            if task_id:
-                from src.backend.core.database import db_manager
-                db_manager.update_task_status(task_id, level=1, status="FAILED", log_msg="No dataset entries generated.")
-
-    # [수정] 대시보드 종료 및 플래그 초기화
-    logger.stop_dashboard()
-    
-    # 이제 터미널에 리포트 출력
-    run_full_investigation()
-    logger.success("데이터셋 준비 프로세스 종료")
-
+            logger.error("데이터셋 구축 실패: 생성된 데이터가 없습니다.")
+            sys.exit(1)
 
 if __name__ == "__main__":
     main()

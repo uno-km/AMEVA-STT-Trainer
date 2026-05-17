@@ -32,9 +32,21 @@ class DatabaseManager:
                     model_path TEXT,
                     report_path TEXT,
                     log_id INTEGER,
+                    checkpoint_path TEXT,
+                    pipeline_config TEXT,
                     FOREIGN KEY (log_id) REFERENCES tb_log (log_id)
                 )
             ''')
+            
+            # 마이그레이션: 기존 테이블에 신규 컬럼이 없다면 추가
+            try:
+                cursor.execute("ALTER TABLE tb_task ADD COLUMN checkpoint_path TEXT")
+            except sqlite3.OperationalError:
+                pass # 이미 존재함
+            try:
+                cursor.execute("ALTER TABLE tb_task ADD COLUMN pipeline_config TEXT")
+            except sqlite3.OperationalError:
+                pass # 이미 존재함
             
             # 1-1. tb_metric: 학습 메트릭(차트용 데이터) 테이블
             cursor.execute('''
@@ -127,11 +139,11 @@ class DatabaseManager:
                 cursor.execute('SELECT * FROM tb_log ORDER BY create_dt ASC LIMIT ?', (limit,))
             return [dict(row) for row in cursor.fetchall()]
 
-    def update_task_status(self, task_id: str, level: int, status: str, log_msg: str = None, model_path: str = None, report_path: str = None):
+    def update_task_status(self, task_id: str, level: int, status: str, log_msg: str = None, model_path: str = None, report_path: str = None, checkpoint_path: str = None, pipeline_config: str = None):
         stts_dt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         log_id = None
         if log_msg:
-            log_id = self.add_log(status, log_msg, task_id)
+            log_id = self.add_log("INFO" if status == "SUCCESS" else "ERROR" if status == "FAILED" else "INFO", log_msg, task_id)
             
         with self.get_connection() as conn:
             sql = "UPDATE tb_task SET level = ?, status = ?, stts_dt = ?"
@@ -145,9 +157,15 @@ class DatabaseManager:
             if report_path:
                 sql += ", report_path = ?"
                 params.append(report_path)
+            if checkpoint_path:
+                sql += ", checkpoint_path = ?"
+                params.append(checkpoint_path)
+            if pipeline_config:
+                sql += ", pipeline_config = ?"
+                params.append(pipeline_config)
             sql += " WHERE id = ?"
             params.append(task_id)
-            conn.execute(sql, tuple(params))
+            conn.cursor().execute(sql, params)
             conn.commit()
 
     def add_metric(self, task_id: str, step: int, loss: float, accuracy: float, cpu_usage: float, speed: float) -> int:

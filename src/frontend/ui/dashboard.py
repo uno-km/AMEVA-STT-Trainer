@@ -31,14 +31,44 @@ class DashboardWindow(QMainWindow):
         super().__init__()
         self.ctx = UIContext()
         self.setWindowTitle("AMEVA STT Trainer - Relational MLOps Dashboard")
-        self.resize(1400, 900)
+        
+        # 윈도우 지오메트리 경고 방지를 위해 적절한 기본 크기 설정
+        self.setMinimumSize(1000, 700)
+        self.resize(1280, 800)
         
         self.init_ui()
         
+        self.wizard.btn_create_sop.clicked.connect(self.start_pipeline_from_sop)
+        self.wizard.btn_mon_back.clicked.connect(lambda: self.toggle_ui_lock(False))
+        self.wizard.btn_force_stop.clicked.connect(self.force_stop_active_task)
+
         # 데이터 폴링 타이머 (중앙 관리)
         self.poll_timer = QTimer()
         self.poll_timer.timeout.connect(self.poll_data)
         self.poll_timer.start(2000)
+
+    def toggle_ui_lock(self, is_locked: bool):
+        """파이프라인 실행 중일 때 다른 페이지로의 이동을 차단합니다."""
+        # 패널 전체를 잠그면 강제 종료 버튼도 안 눌리므로, 뒤로가기 버튼만 제어합니다.
+        self.wizard.btn_mon_back.setVisible(not is_locked)
+        self.wizard.btn_force_stop.setVisible(is_locked)
+        
+        if is_locked:
+            # 실행 중일 때는 관제 화면(Index 6)에서 탈출 불가능하도록 설정
+            self.wizard.stack.setCurrentIndex(6)
+
+    def force_stop_active_task(self):
+        """현재 실행 중인 태스크를 즉시 사살하고 체크포인트를 저장하도록 API에 요청합니다."""
+        active_id = getattr(self, 'active_log_task_id', None)
+        if not active_id: return
+        
+        reply = QMessageBox.question(self, "강제 종료", "정말 학습을 중단하시겠습니까?\n마지막 체크포인트가 보존됩니다.", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if reply == QMessageBox.StandardButton.Yes:
+            res = self.ctx.api.post("/api/v1/tasks/stop", {"task_id": active_id})
+            if res and res.get("status") == "Killed":
+                self.log_panel.update_logs("\n[SYSTEM] 사용자 요청으로 프로세스가 강제 종료되었습니다.\n")
+                self.toggle_ui_lock(False)
+                self.poll_data() # 즉시 상태 동기화
 
     def init_ui(self):
         central_widget = QWidget()
@@ -94,8 +124,7 @@ class DashboardWindow(QMainWindow):
         self.explorer.tree.itemDoubleClicked.connect(self.on_file_double_clicked)
         left_layout.addWidget(self.explorer, 1) # 탐색기가 나머지 점유
         
-        self.resource = ResourcePanel()
-        self.resource.slider.valueChanged.connect(self.update_cpu_affinity)
+        self.resource = ResourcePanel(self.ctx)
         left_layout.addWidget(self.resource, 0)
         
         splitter.addWidget(left_widget)
@@ -178,31 +207,83 @@ class DashboardWindow(QMainWindow):
             current_page.deleteLater()
 
     def poll_data(self):
-        hw = self.ctx.api.get("/api/v1/hardware/status")
-        if hw:
-            self.resource.update_status(hw.get('cpu_percent', 0), hw.get('memory_usage_mb', 0), hw.get('allocated_cores', 1), hw.get('total_cores', 16))
-            self.chart_hw.add_data(hw.get('cpu_usage', 0))
+        """서버로부터 실시간 데이터를 가져와 UI를 갱신 (철저한 예외 방어)"""
+        try:
+            # 1. 하드웨어 상태
+            hw = self.ctx.api.get("/api/v1/hardware/status")
+            if hw and isinstance(hw, dict):
+                # ResourcePanel.update_stats는 {'cpu': n, 'ram': n, 'gpu': n} 형태의 딕셔너리를 받음
+                self.resource.update_stats({
+                    "cpu": hw.get('cpu_percent', 0),
+                    "ram": hw.get('memory_usage_mb', 0) / 1024, # MB를 GB로 변환 (필요시)
+                    "gpu": hw.get('gpu_usage', 0)
+                })
+                if hasattr(self, 'chart_hw'):
+                    self.chart_hw.add_data(hw.get('cpu_usage', 0))
+                
+            # 2. 파이프라인 상태
+            pipe = self.ctx.api.get("/api/v1/pipeline/status")
+            if pipe and isinstance(pipe, dict):
+                self.task_label.setText(pipe.get('task_name', 'AMEVA STT Engine'))
+                stage = pipe.get('stage', 'IDLE')
+                self.stage_label.setText(f"Stage: {stage}")
+                
+                if stage != "IDLE":
+                    import random
+                    self.chart_loss.add_data(max(0.1, 5.0 - (len(self.chart_loss.chart.data)*0.05) + random.uniform(-0.3, 0.3)))
+                    self.chart_speed.add_data(random.uniform(210, 280))
+                    acc_base = 0.8 + (len(self.chart_metric.chart.data) * 0.003)
+                    self.chart_metric.add_data(min(0.99, acc_base + random.uniform(-0.01, 0.01)))
+
+            # 3. 로그 업데이트 (현재 활성화된 태스크 기준)
+            active_id = getattr(self, 'active_log_task_id', None)
+            if active_id:
+                logs_res = self.ctx.api.get(f"/api/v1/tasks/logs?task_id={active_id}")
+                if logs_res and isinstance(logs_res, dict) and "logs" in logs_res:
+                    self.log_panel.update_logs(logs_res['logs'])
             
-        pipe = self.ctx.api.get("/api/v1/pipeline/status")
-        if pipe:
-            self.task_label.setText(pipe.get('task_name', 'AMEVA STT Engine'))
-            stage = pipe.get('stage', 'IDLE')
-            self.stage_label.setText(f"Stage: {stage}")
-            
-            if stage != "IDLE":
-                import random
-                self.chart_loss.add_data(max(0.1, 5.0 - (len(self.chart_loss.chart.data)*0.05) + random.uniform(-0.3, 0.3)))
-                self.chart_speed.add_data(random.uniform(210, 280))
-                acc_base = 0.8 + (len(self.chart_metric.chart.data) * 0.003)
-                self.chart_metric.add_data(min(0.99, acc_base + random.uniform(-0.01, 0.01)))
-            
-        logs = self.ctx.api.get("/api/v1/pipeline/logs")
-        if logs and "logs" in logs:
-            self.log_panel.update_logs(logs['logs'])
-            
-        if self.explorer.tree.topLevelItemCount() == 0:
-            files = self.ctx.api.get("/api/v1/files/explorer")
-            self.explorer.update_data(files)
+            # 4. 파일 탐색기 초기화 (1회성)
+            if self.explorer.tree.topLevelItemCount() == 0:
+                files = self.ctx.api.get("/api/v1/files/explorer")
+                if files and isinstance(files, list): 
+                    self.explorer.update_data(files)
+
+            # 5. 전체 태스크 상태 동기화 (관제판 업데이트)
+            self.sync_task_status_to_monitor()
+
+        except Exception as e:
+            print(f"[Polling Error] {str(e)}")
+
+    def sync_task_status_to_monitor(self):
+        """현재 활성화된 태스크의 상세 상태를 관제 모니터에 반영"""
+        active_id = getattr(self, 'active_log_task_id', None)
+        if not active_id: return
+        
+        tasks_res = self.ctx.api.get("/api/v1/tasks/list")
+        if tasks_res and isinstance(tasks_res, dict) and "tasks" in tasks_res:
+            for t in tasks_res["tasks"]:
+                if t.get('id') == active_id:
+                    status = t.get('status', 'IDLE')
+                    level = t.get('level', 1)
+                    name = t.get('tsk_nm', 'Unknown')
+                    
+                    # 관제 모니터 레이블 갱신
+                    self.wizard.update_monitor(name, level, status)
+                    
+                    # 상단 바 상태 레이블 동기화
+                    if status == "RUNNING":
+                        self.stage_label.setText(f"Stage: {level}단계 진행중")
+                        self.stage_label.setStyleSheet(f"color: {self.ctx.get_color('warning')}; background-color: {self.ctx.get_color('bg_panel')}; padding: 5px 12px; border-radius: 6px;")
+                        self.toggle_ui_lock(True)
+                    elif status == "SUCCESS":
+                        self.stage_label.setText("Stage: 공정 완료")
+                        self.stage_label.setStyleSheet(f"color: {self.ctx.get_color('success')}; background-color: {self.ctx.get_color('bg_panel')}; padding: 5px 12px; border-radius: 6px;")
+                        self.toggle_ui_lock(False)
+                    else:
+                        self.stage_label.setText(f"Stage: {status}")
+                        self.stage_label.setStyleSheet(f"color: {self.ctx.get_color('error')}; background-color: {self.ctx.get_color('bg_panel')}; padding: 5px 12px; border-radius: 6px;")
+                        self.toggle_ui_lock(False)
+                    break
 
     def on_file_double_clicked(self, item, col):
         path = item.data(0, Qt.ItemDataRole.UserRole)
@@ -213,43 +294,64 @@ class DashboardWindow(QMainWindow):
             self.tabs.setCurrentWidget(viewer)
 
     def start_pipeline_from_sop(self, step=1):
-        """SOP 위저드 단계에 따라 파이프라인을 가동함 (1~step 단계까지)"""
         name = self.wizard.task_name_edit.text().strip()
-        
-        # 이어하기 중인지 확인
         task_id = getattr(self, 'current_resume_task_id', None)
         
+        self.toggle_ui_lock(True)
         if not task_id:
-            # --- [신규 태스크 생성 모드] ---
             if not name:
                 QMessageBox.warning(self, "경고", "태스크 이름을 입력해주세요.")
                 self.wizard.stack.setCurrentIndex(1)
+                self.toggle_ui_lock(False)
                 return
-            
+                
+            source_type = "local" if self.wizard.radio_local.isChecked() else "youtube"
             url = self.wizard.task_url_edit.text().strip()
             count = self.wizard.task_count_spin.value()
+            folder = self.wizard.task_folder_edit.text().strip()
+            max_steps = self.wizard.max_steps_spin.value()
+            auto_export = self.wizard.auto_export_cb.isChecked()
+            method = self.wizard.auto_method_cb.currentText()
             
-            payload_init = {"name": name, "source_type": "youtube", "url": url, "count": count}
+            if source_type == "local" and not folder:
+                QMessageBox.warning(self, "경고", "로컬 데이터셋 폴더 경로를 입력하거나 탐색해주세요.")
+                self.wizard.stack.setCurrentIndex(1)
+                self.toggle_ui_lock(False)
+                return
+            
+            # 1,2,3단계 설정값을 한방에 보냅니다!
+            payload_init = {
+                "name": name, 
+                "source_type": source_type, 
+                "url": url, 
+                "count": count,
+                "folder": folder,
+                "max_steps": max_steps,
+                "auto_export": auto_export,
+                "method": method
+            }
             res = self.ctx.api.post("/api/v1/tasks/init_data", payload_init)
             if not res or "id" not in res:
                 QMessageBox.critical(self, "오류", "태스크 생성에 실패했습니다.")
+                self.toggle_ui_lock(False)
                 return
             task_id = res["id"]
-        
-        # --- [공통: 다음 단계 예약 및 실행] ---
-        # 사용자가 현재 SOP 단계에서 '시작'을 눌렀으므로 그에 맞는 레벨까지 예약
-        if step >= 2:
+        else:
+            # 이어하기(Resume) 로직: 바로 2단계 가동
             max_steps = self.wizard.max_steps_spin.value()
-            auto_export = (step >= 3)
+            auto_export = self.wizard.auto_export_cb.isChecked()
             method = self.wizard.auto_method_cb.currentText()
-            
             payload_train = {"task_id": task_id, "max_steps": max_steps, "auto_export": auto_export, "method": method}
             self.ctx.api.post("/api/v1/tasks/start_train", payload_train)
 
-        # 초기화 및 안내
-        self.wizard.stack.setCurrentIndex(6) # 모니터링 화면으로 워프!
-        self.wizard.update_monitor(name, 1, "RUNNING") # 초기 상태 표시
+        # 상태 락온(Lock-on) 및 모니터링 강제 납치
+        self.active_log_task_id = task_id
+        self.wizard.stack.setCurrentIndex(6) 
+        self.wizard.update_monitor(name, 1, "RUNNING")
+        
         self.current_resume_task_id = None
+        self.wizard.task_name_edit.setEnabled(True)
+        self.wizard.task_name_edit.clear()
         self.sync_task_list()
 
     def sync_task_list(self):
@@ -260,6 +362,7 @@ class DashboardWindow(QMainWindow):
             
             sorted_tasks = sorted(res["tasks"], key=lambda x: x.get('report_path') is None)
             
+            running_tasks = []
             for t in sorted_tasks:
                 level = t.get('level', 1)
                 status = t.get('status', 'RUNNING')
@@ -274,12 +377,21 @@ class DashboardWindow(QMainWindow):
                     state_txt = f"[❌ {level}단계 실패]"
                 else:
                     state_txt = f"[⏳ {level}단계 진행중]"
+                    running_tasks.append(t)
                     
                 display_text = f"{icon}{t['tsk_nm']} {state_txt}"
                 self.wizard.task_list_cb.addItem(display_text, t)
                 
                 if level >= 2 and status == "SUCCESS":
                     self.wizard.export_task_cb.addItem(f"✅ {t['tsk_nm']}", t['id'])
+            
+            # 대시보드 켰을 때(또는 동기화 시) RUNNING 중인 태스크가 있으면 강제 납치
+            if running_tasks and getattr(self, 'active_log_task_id', None) is None:
+                rt = running_tasks[0]
+                self.active_log_task_id = rt['id']
+                self.wizard.stack.setCurrentIndex(6)
+                self.wizard.update_monitor(rt['tsk_nm'], rt.get('level', 1), "RUNNING")
+
 
     def load_selected_report(self):
         task_data = self.wizard.task_list_cb.currentData()
@@ -295,11 +407,20 @@ class DashboardWindow(QMainWindow):
             return
 
         if status == "FAILED":
-            if QMessageBox.warning(self, "작업 실패", f"[{name}] {level}단계 재시도할까요?", QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
-                self.ctx.api.post("/api/v1/tasks/restart", {"task_id": task_id})
-            return
+            if QMessageBox.warning(self, "작업 실패", f"[{name}] {level}단계에서 멈췄습니다. 재시도하시겠습니까?", QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
+                self.current_resume_task_id = task_id
+                self.active_log_task_id = task_id # 로그 타겟 변경
+                self.wizard.task_name_edit.setText(name)
+                self.wizard.task_name_edit.setDisabled(True) # 이름 수정 방지
+                
+                if level == 1:
+                    self.wizard.stack.setCurrentIndex(1) # 데이터 구축 페이지로
+                elif level == 2:
+                    self.wizard.stack.setCurrentIndex(2) # 학습 설정 페이지로
+                return
 
         if status == "SUCCESS":
+            self.active_log_task_id = task_id # 로그 타겟 변경
             if level == 1:
                 if QMessageBox.question(self, "1단계 완료", "2단계(학습) 설정으로 이동할까요?", QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
                     self.current_resume_task_id = task_id
@@ -351,6 +472,11 @@ class DashboardWindow(QMainWindow):
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
+    
+    # Windows 폰트 렌더링 에러(Fixedsys) 방지
+    from PyQt6.QtGui import QFont
+    app.setFont(QFont("Malgun Gothic", 10))
+    
     window = DashboardWindow()
     window.show()
     sys.exit(app.exec())
