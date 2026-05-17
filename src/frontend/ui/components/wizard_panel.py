@@ -48,6 +48,11 @@ class WizardPanel(QWidget):
         
         # --- [투명 프록시 프론트 레이어] ---
         # dashboard.py 등 외부 호출 컨트롤러가 기존 필드명을 그대로 쓸 수 있게 인스턴스 맵핑
+        # Page 0 (메인 메뉴)
+        self.btn_new          = self.page0.btn_new
+        self.btn_load         = self.page0.btn_load
+        self.btn_manual       = self.page0.btn_manual
+
         # Page 1 (데이터 구축)
         self.task_name_edit   = self.page1.task_name_edit
         self.radio_youtube    = self.page1.radio_youtube
