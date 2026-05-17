@@ -311,18 +311,64 @@ class WizardPanel(QWidget):
     def init_load_page(self):
         p = QWidget(); l = QVBoxLayout(p)
         l.setContentsMargins(25, 25, 25, 25)
-        l.addWidget(self._create_styled_label("📂 과거 기록 불러오기", True))
+        l.addWidget(self._create_styled_label("📂 과거 학습 기록 및 이어하기", True))
         
-        self.task_list_cb = self._create_styled_input(QComboBox())
-        l.addWidget(self.task_list_cb)
+        desc = QLabel("과거에 수행했거나 진행 중 멈춘 모든 태스크 목록입니다. 목록에서 복구할 대상을 선택하세요.")
+        desc.setStyleSheet(f"color: {self.ctx.get_color('text_dim')}; font-size: 11px; margin-bottom: 10px;")
+        desc.setWordWrap(True)
+        l.addWidget(desc)
         
-        self.btn_load_confirm = QPushButton("이전 결과 확인 / 이어하기")
+        self.task_list_widget = QListWidget()
+        self.task_list_widget.setStyleSheet(f"""
+            QListWidget {{
+                background-color: {self.ctx.get_color('bg_dark')};
+                border: 1px solid {self.ctx.get_color('border')};
+                border-radius: 8px;
+                color: white;
+                padding: 6px;
+            }}
+            QListWidget::item {{
+                background-color: {self.ctx.get_color('bg_panel')};
+                border: 1px solid {self.ctx.get_color('border')};
+                border-radius: 6px;
+                margin: 4px 2px;
+                padding: 12px;
+                color: white;
+            }}
+            QListWidget::item:hover {{
+                background-color: {self.ctx.get_color('border')};
+                border-color: {self.ctx.get_color('accent')};
+            }}
+            QListWidget::item:selected {{
+                background-color: {self.ctx.get_color('accent')};
+                color: {self.ctx.get_color('bg_dark')};
+                font-weight: bold;
+            }}
+        """)
+        l.addWidget(self.task_list_widget)
+        
+        self.btn_load_confirm = QPushButton("선택한 태스크 불러오기 🔓")
         self.btn_load_confirm.setFixedHeight(45)
-        self.btn_load_confirm.setStyleSheet(f"background-color: {self.ctx.get_color('accent')}; color: {self.ctx.get_color('bg_dark')}; font-weight: bold;")
+        self.btn_load_confirm.setStyleSheet(f"background-color: {self.ctx.get_color('accent')}; color: {self.ctx.get_color('bg_dark')}; font-weight: bold; font-size: 13px;")
         l.addWidget(self.btn_load_confirm)
         
-        btn_b = QPushButton("⬅ 메인으로"); btn_b.clicked.connect(lambda: self.stack.setCurrentIndex(0))
-        l.addWidget(btn_b)
+        self.btn_load_back = QPushButton("🔙 메인으로 돌아가기")
+        self.btn_load_back.setFixedHeight(40)
+        self.btn_load_back.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {self.ctx.get_color('bg_dark')};
+                color: white;
+                border: 1px solid {self.ctx.get_color('border')};
+                border-radius: 6px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: {self.ctx.get_color('border')};
+                border-color: {self.ctx.get_color('accent')};
+            }}
+        """)
+        self.btn_load_back.clicked.connect(lambda: self.stack.setCurrentIndex(0))
+        l.addWidget(self.btn_load_back)
         l.addStretch()
         self.stack.addWidget(p)
 
@@ -344,7 +390,22 @@ class WizardPanel(QWidget):
         self.btn_export_run.setStyleSheet(f"background-color: {self.ctx.get_color('warning')}; color: {self.ctx.get_color('bg_dark')}; font-weight: bold;")
         l.addWidget(self.btn_export_run)
         
-        btn_b = QPushButton("⬅ 메인으로"); btn_b.clicked.connect(lambda: self.stack.setCurrentIndex(0))
+        btn_b = QPushButton("⬅ 메인으로")
+        btn_b.setFixedHeight(40)
+        btn_b.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {self.ctx.get_color('bg_dark')};
+                color: white;
+                border: 1px solid {self.ctx.get_color('border')};
+                border-radius: 6px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: {self.ctx.get_color('border')};
+                border-color: {self.ctx.get_color('accent')};
+            }}
+        """)
+        btn_b.clicked.connect(lambda: self.stack.setCurrentIndex(0))
         l.addWidget(btn_b)
         l.addStretch()
         self.stack.addWidget(p)
@@ -407,7 +468,21 @@ class WizardPanel(QWidget):
         layout.addWidget(self.btn_force_stop)
         
         # 메인으로 돌아가기 버튼 (대기/종료 시에만 보이게 할 예정)
-        self.btn_mon_back = QPushButton("메인으로 (돌아가기)")
+        self.btn_mon_back = QPushButton("🔙 메인으로 돌아가기")
+        self.btn_mon_back.setFixedHeight(40)
+        self.btn_mon_back.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {self.ctx.get_color('bg_dark')};
+                color: white;
+                border: 1px solid {self.ctx.get_color('border')};
+                border-radius: 6px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: {self.ctx.get_color('border')};
+                border-color: {self.ctx.get_color('accent')};
+            }}
+        """)
         self.btn_mon_back.clicked.connect(lambda: self.stack.setCurrentIndex(0))
         layout.addWidget(self.btn_mon_back)
         

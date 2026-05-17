@@ -1,5 +1,6 @@
 import os
 import glob
+import json
 from src.backend.core.pseudo_router import router
 from src.backend.core.task_manager import task_manager
 
@@ -34,14 +35,27 @@ def get_pipeline_logs():
     return {"logs": db_manager.get_logs(limit=100)}
 
 def scan_directory(base_path):
-    """지정된 경로의 모든 하위 파일 목록을 재귀적으로 반환합니다."""
+    """지정된 경로의 모든 하위 파일 목록을 재귀적으로 반환합니다. (안전 깊이 제한 및 chunks 폴더 스킵 적용)"""
     if not os.path.exists(base_path):
         return []
     
-    def get_recursive_items(path):
+    def get_recursive_items(path, depth=0):
+        if depth > 3: # 안전 마진: 너무 깊은 재귀 차단
+            return []
         items = []
         try:
             for entry in os.scandir(path):
+                # chunks 폴더는 내부의 수천개 .wav 스캔을 건너뛰어 속도 저하 방지
+                if entry.name == "chunks" and entry.is_dir():
+                    items.append({
+                        "name": entry.name,
+                        "is_dir": True,
+                        "path": entry.path,
+                        "size": 0,
+                        "children": [] # 하위 파일 목록은 비워둠
+                    })
+                    continue
+                
                 item = {
                     "name": entry.name,
                     "is_dir": entry.is_dir(),
@@ -49,7 +63,7 @@ def scan_directory(base_path):
                     "size": entry.stat().st_size if entry.is_file() else 0
                 }
                 if entry.is_dir():
-                    item["children"] = get_recursive_items(entry.path)
+                    item["children"] = get_recursive_items(entry.path, depth + 1)
                 items.append(item)
         except Exception:
             pass
@@ -79,26 +93,22 @@ def list_tasks():
 @router.post("/api/v1/tasks/init_data")
 def init_data(body: dict):
     name = body.get("name", "New Task")
-    source_type = body.get("source_type", "youtube")
-    url = body.get("url", "")
-    count = body.get("count", 5)
-    folder = body.get("folder", "")
+    step_limit = body.get("step_limit", 1)
+    step1_params = body.get("step1_params", {})
+    step2_params = body.get("step2_params", {})
+    step3_params = body.get("step3_params", {})
     
-    # 2,3단계 설정값 수집
-    pipeline_config = json.dumps({
-        "max_steps": body.get("max_steps", 100),
-        "auto_export": body.get("auto_export", True),
-        "method": body.get("method", "q4_0")
-    })
-    
-    res = task_manager.init_data(name, source_type, url, count, folder, pipeline_config)
+    res = task_manager.init_data(name, step_limit, step1_params, step2_params, step3_params)
     return res
 
 @router.post("/api/v1/tasks/start_train")
 def start_train(body: dict):
     task_id = body.get("task_id")
-    train_params = json.dumps(body)
-    return task_manager.start_train(task_id, train_params)
+    step_limit = body.get("step_limit", 2)
+    step2_params = body.get("step2_params", {})
+    step3_params = body.get("step3_params", {})
+    
+    return task_manager.start_train(task_id, step_limit, step2_params, step3_params)
 
 @router.post("/api/v1/tasks/stop")
 def stop_task(body: dict):

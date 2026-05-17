@@ -26,23 +26,23 @@ from src.core.config    import METADATA_PATH, DATASET_DIR
 from src.utils          import logger
 
 
-def run_full_investigation():
+def run_full_investigation(metadata_path=METADATA_PATH, dataset_dir=DATASET_DIR):
     """데이터셋 빌드 완료 후 품질 상태를 전수 조사하여 예쁘게 출력한다."""
     # [수정] 대시보드 종료 후 화면을 한 번 깨끗하게 밀어줌
     if os.name == 'nt': os.system('cls')
     else: os.system('clear')
 
-    if not os.path.exists(METADATA_PATH):
-        logger.error("metadata.csv를 찾을 수 없어 전수 조사를 건너뜁니다.")
+    if not os.path.exists(metadata_path):
+        logger.error(f"{metadata_path}를 찾을 수 없어 전수 조사를 건너뜁니다.")
         return
 
-    df = pd.read_csv(METADATA_PATH)
+    df = pd.read_csv(metadata_path)
     total_records = len(df)
     
     # 1. 파일 존재 여부 확인
     missing_count = 0
     for fname in df['file_name']:
-        if not os.path.exists(os.path.join(DATASET_DIR, fname)):
+        if not os.path.exists(os.path.join(dataset_dir, fname)):
             missing_count += 1
     
     # 2. 텍스트 중복(말더듬) 분석 - 더 엄격한 기준으로 검사
@@ -89,7 +89,7 @@ def run_full_investigation():
     if stutter_ratio < 5.0 and missing_count == 0:
         logger.success("🎊 축하합니다! 데이터셋이 최상의 상태로 준비되었습니다. 이제 02단계 학습을 시작하세요!")
     else:
-        logger.warning("일부 데이터에 보정이 필요할 수 있습니다. 위 리포트를 참고해 주세요.")
+        logger.info("⚠️ 일부 데이터에 보정이 필요할 수 있습니다. 위 리포트를 참고해 주세요.")
 
 
 def main():
@@ -123,14 +123,54 @@ def main():
 
         # 1. 데이터 수집 (유튜브 혹은 폴더)
         logger.set_status("데이터 수집 중", "채널 목록 및 오디오 수집")
-        if args.source_type == "youtube":
+        video_list = []
+        is_local = bool(args.folder) or (args.source_type == "local")
+
+        if not is_local:
             video_list = scrape_channel(url=args.url, count=args.count)
         else:
-            logger.warning(f"Local folder mode not implemented: {args.folder}")
-            video_list = []
+            folder_path = args.folder
+            logger.info(f"로컬 폴더 모드 가동: {folder_path}")
+            if not os.path.exists(folder_path):
+                logger.error(f"지정된 로컬 폴더가 존재하지 않습니다: {folder_path}")
+                sys.exit(1)
+            
+            import glob
+            from datetime import datetime
+            today_str = datetime.today().strftime("%Y%m%d")
+            
+            # 폴더 내 모든 하위 경로에서 .wav 오디오 파일 재귀 탐색
+            wav_files = glob.glob(os.path.join(folder_path, "**", "*.wav"), recursive=True)
+            for wav_path in wav_files:
+                # 렉 유도 방지: 이미 분할된 chunks 폴더 내부의 wav는 원본이 아니므로 제외
+                if "chunks" in wav_path.replace("\\", "/").split("/"):
+                    continue
+                    
+                parent_dir = os.path.dirname(wav_path)
+                video_id = os.path.basename(parent_dir) # 폴더명이 곧 영상 ID (예: gZ1HlsRJV1w)
+                
+                # 해당 디렉토리 내에 있는 모든 .vtt 파일 리스팅
+                local_vtts = glob.glob(os.path.join(parent_dir, "*.vtt"))
+                vtt_path = None
+                
+                if local_vtts:
+                    # 1순위: 파일명이 영상 ID로 시작하는 VTT 검색
+                    for vf in local_vtts:
+                        if os.path.basename(vf).startswith(video_id):
+                            vtt_path = vf
+                            break
+                    # 2순위: 폴더 내에 자막이 단 1개만 있다면 무조건 매칭
+                    if not vtt_path and len(local_vtts) == 1:
+                        vtt_path = local_vtts[0]
+                
+                if vtt_path:
+                    video_list.append((video_id, today_str, wav_path, vtt_path))
+                    logger.info(f"로컬 파일 매칭 성공: {video_id} -> {os.path.basename(wav_path)} + {os.path.basename(vtt_path)}")
+                else:
+                    logger.info(f"⚠️ 자막(.vtt) 매칭 실패로 제외: {os.path.basename(wav_path)}")
 
         if not video_list:
-            logger.warning("수집된 영상이 없습니다.")
+            logger.info("⚠️ 수집된 영상이 없습니다.")
             sys.exit(1)
 
         # 2. 오디오 전처리 및 청크 분할

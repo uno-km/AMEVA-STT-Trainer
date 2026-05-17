@@ -133,7 +133,7 @@ def _time_to_ms(time_str: str) -> int:
 
 @exception_guard(location="process_video() -> 청크 분할")
 def process_video(
-    video_id: str, date_str: str, audio_path: str, vtt_path: str, mode: str = "basic"
+    video_id: str, date_str: str, audio_path: str, vtt_path: str, mode: str = "basic", output_dir: Optional[str] = None
 ) -> List[Dict[str, str]]:
     captions = parse_vtt(vtt_path)
     if not captions: return []
@@ -141,7 +141,9 @@ def process_video(
     if audio is None: return []
 
     y, m, d = date_str[:4], date_str[4:6], date_str[6:8]
-    chunks_abs_dir = os.path.join(DATASET_DIR, y, m, d, video_id, "chunks")
+    # 격리된 output_dir을 지정했다면 해당 폴더 기준으로 chunks 디렉토리 형성
+    base_out_dir = output_dir if output_dir else DATASET_DIR
+    chunks_abs_dir = os.path.join(base_out_dir, y, m, d, video_id, "chunks")
     os.makedirs(chunks_abs_dir, exist_ok=True)
 
     max_dur = min(CFG["max_chunk_duration_ms"], 30000)

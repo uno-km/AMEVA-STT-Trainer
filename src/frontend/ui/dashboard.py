@@ -7,7 +7,7 @@ if project_root not in sys.path:
 
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QLabel, QSplitter, QTabWidget, QMessageBox,
-                             QStackedWidget, QGridLayout)
+                             QStackedWidget, QGridLayout, QListWidgetItem, QDialog, QFrame)
 from PyQt6.QtCore import Qt, QTimer
 
 # Core Binding
@@ -21,6 +21,7 @@ from src.frontend.ui.components.explorer_panel import ExplorerPanel
 from src.frontend.ui.components.wizard_panel import WizardPanel
 from src.frontend.ui.components.report import ReportWindow
 from src.frontend.ui.components.viewers import CSVViewer
+from src.frontend.ui.components.task_action_dialog import TaskActionDialog
 
 class DashboardWindow(QMainWindow):
     """
@@ -46,6 +47,9 @@ class DashboardWindow(QMainWindow):
         self.poll_timer = QTimer()
         self.poll_timer.timeout.connect(self.poll_data)
         self.poll_timer.start(2000)
+        
+        # 앱 최초 기동 시 오차 없이 언제나 깨끗한 메인 화면으로 시작 (강제 납치 원천 봉쇄)
+        self.sync_task_list()
 
     def toggle_ui_lock(self, is_locked: bool):
         """파이프라인 실행 중일 때 다른 페이지로의 이동을 차단합니다."""
@@ -117,7 +121,15 @@ class DashboardWindow(QMainWindow):
         self.wizard.btn_s3_start.clicked.connect(lambda: self.start_pipeline_from_sop(step=3))
         
         self.wizard.btn_load_confirm.clicked.connect(self.load_selected_report)
+        self.wizard.task_list_widget.itemDoubleClicked.connect(self.load_selected_report) # 더블클릭 원클릭 팝업
         self.wizard.btn_export_run.clicked.connect(self.run_export_pipeline)
+        
+        # 명시적 화면 복귀 및 새 작업 시작 시 컨텍스트 완전 정화 바인딩
+        self.wizard.btn_new.clicked.connect(self.clear_resume_context)
+        self.wizard.btn_s1_back.clicked.connect(self.clear_resume_context)
+        self.wizard.btn_load_back.clicked.connect(self.clear_resume_context)
+        self.wizard.btn_mon_back.clicked.connect(self.clear_resume_context)
+        
         left_layout.addWidget(self.wizard, 0)
         
         self.explorer = ExplorerPanel(self.ctx)
@@ -309,9 +321,6 @@ class DashboardWindow(QMainWindow):
             url = self.wizard.task_url_edit.text().strip()
             count = self.wizard.task_count_spin.value()
             folder = self.wizard.task_folder_edit.text().strip()
-            max_steps = self.wizard.max_steps_spin.value()
-            auto_export = self.wizard.auto_export_cb.isChecked()
-            method = self.wizard.auto_method_cb.currentText()
             
             if source_type == "local" and not folder:
                 QMessageBox.warning(self, "경고", "로컬 데이터셋 폴더 경로를 입력하거나 탐색해주세요.")
@@ -319,35 +328,59 @@ class DashboardWindow(QMainWindow):
                 self.toggle_ui_lock(False)
                 return
             
-            # 1,2,3단계 설정값을 한방에 보냅니다!
-            payload_init = {
-                "name": name, 
-                "source_type": source_type, 
-                "url": url, 
-                "count": count,
-                "folder": folder,
-                "max_steps": max_steps,
-                "auto_export": auto_export,
-                "method": method
+            # [체이닝 알고리즘] 각 단계별 파라미터 완전 격리
+            payload = {
+                "name": name,
+                "step_limit": step,
+                "step1_params": {
+                    "source_type": source_type, "url": url, "count": count, "folder": folder
+                },
+                "step2_params": {
+                    "action": "start_training",
+                    "model_id": self.wizard.model_cb.currentText(),
+                    "max_steps": self.wizard.max_steps_spin.value(),
+                    "learning_rate": self.wizard.lr_edit.text().strip(),
+                    "batch_size": self.wizard.batch_spin.value(),
+                    "gradient_accumulation": self.wizard.grad_acc_spin.value()
+                },
+                "step3_params": {
+                    "action": "export_model",
+                    "auto_export": self.wizard.auto_export_cb.isChecked(),
+                    "method": self.wizard.auto_method_cb.currentText()
+                }
             }
-            res = self.ctx.api.post("/api/v1/tasks/init_data", payload_init)
+            
+            res = self.ctx.api.post("/api/v1/tasks/init_data", payload)
             if not res or "id" not in res:
                 QMessageBox.critical(self, "오류", "태스크 생성에 실패했습니다.")
                 self.toggle_ui_lock(False)
                 return
             task_id = res["id"]
         else:
-            # 이어하기(Resume) 로직: 바로 2단계 가동
-            max_steps = self.wizard.max_steps_spin.value()
-            auto_export = self.wizard.auto_export_cb.isChecked()
-            method = self.wizard.auto_method_cb.currentText()
-            payload_train = {"task_id": task_id, "max_steps": max_steps, "auto_export": auto_export, "method": method}
+            # 이어하기(Resume) 로직: 기존 태스크에 대해 새로운 단계 셋팅 및 체이닝 저장
+            payload_train = {
+                "task_id": task_id,
+                "step_limit": step,
+                "step2_params": {
+                    "action": "start_training",
+                    "model_id": self.wizard.model_cb.currentText(),
+                    "max_steps": self.wizard.max_steps_spin.value(),
+                    "learning_rate": self.wizard.lr_edit.text().strip(),
+                    "batch_size": self.wizard.batch_spin.value(),
+                    "gradient_accumulation": self.wizard.grad_acc_spin.value()
+                },
+                "step3_params": {
+                    "action": "export_model",
+                    "auto_export": self.wizard.auto_export_cb.isChecked(),
+                    "method": self.wizard.auto_method_cb.currentText()
+                }
+            }
             self.ctx.api.post("/api/v1/tasks/start_train", payload_train)
 
         # 상태 락온(Lock-on) 및 모니터링 강제 납치
         self.active_log_task_id = task_id
         self.wizard.stack.setCurrentIndex(6) 
-        self.wizard.update_monitor(name, 1, "RUNNING")
+        self.wizard.update_monitor(name, step, "RUNNING") # step 인수를 이용해 기동 단계(2단계 등)를 모니터에 정확히 전달
         
         self.current_resume_task_id = None
         self.wizard.task_name_edit.setEnabled(True)
@@ -357,12 +390,12 @@ class DashboardWindow(QMainWindow):
     def sync_task_list(self):
         res = self.ctx.api.get("/api/v1/tasks/list")
         if res and "tasks" in res:
-            self.wizard.task_list_cb.clear()
+            self.wizard.task_list_widget.clear()
             self.wizard.export_task_cb.clear()
             
-            sorted_tasks = sorted(res["tasks"], key=lambda x: x.get('report_path') is None)
+            # DB가 보장하는 생성 시간(최신순)을 100% 보존
+            sorted_tasks = res["tasks"]
             
-            running_tasks = []
             for t in sorted_tasks:
                 level = t.get('level', 1)
                 status = t.get('status', 'RUNNING')
@@ -377,25 +410,27 @@ class DashboardWindow(QMainWindow):
                     state_txt = f"[❌ {level}단계 실패]"
                 else:
                     state_txt = f"[⏳ {level}단계 진행중]"
-                    running_tasks.append(t)
                     
                 display_text = f"{icon}{t['tsk_nm']} {state_txt}"
-                self.wizard.task_list_cb.addItem(display_text, t)
+                
+                item = QListWidgetItem(display_text)
+                item.setData(Qt.ItemDataRole.UserRole, t)
+                self.wizard.task_list_widget.addItem(item)
                 
                 if level >= 2 and status == "SUCCESS":
                     self.wizard.export_task_cb.addItem(f"✅ {t['tsk_nm']}", t['id'])
             
-            # 대시보드 켰을 때(또는 동기화 시) RUNNING 중인 태스크가 있으면 강제 납치
-            if running_tasks and getattr(self, 'active_log_task_id', None) is None:
-                rt = running_tasks[0]
-                self.active_log_task_id = rt['id']
-                self.wizard.stack.setCurrentIndex(6)
-                self.wizard.update_monitor(rt['tsk_nm'], rt.get('level', 1), "RUNNING")
+            # 초기 진입 시 등 뒤에서 파란색 하이라이트가 자동 지정되는 일 방지
+            self.wizard.task_list_widget.clearSelection()
+            self.wizard.task_list_widget.setCurrentRow(-1)
 
 
     def load_selected_report(self):
-        task_data = self.wizard.task_list_cb.currentData()
-        if not task_data: return
+        current_item = self.wizard.task_list_widget.currentItem()
+        task_data = current_item.data(Qt.ItemDataRole.UserRole) if current_item else None
+        if not task_data: 
+            QMessageBox.warning(self, "경고", "불러올 태스크를 목록에서 먼저 선택해 주세요.")
+            return
         
         task_id = task_data['id']
         name = task_data['tsk_nm']
@@ -403,40 +438,70 @@ class DashboardWindow(QMainWindow):
         status = task_data.get('status', 'FAILED')
         
         if status == "RUNNING":
-            QMessageBox.information(self, "진행 중", f"현재 {level}단계 작업이 진행 중입니다. ⏳")
+            # 진행 중인 태스크를 즉각 락온(Lock-on)하고 모니터링 화면으로 활성 인입 처리!
+            self.active_log_task_id = task_id
+            self.toggle_ui_lock(True)
+            self.wizard.stack.setCurrentIndex(6)
+            self.wizard.update_monitor(name, level, "RUNNING")
             return
 
-        if status == "FAILED":
-            if QMessageBox.warning(self, "작업 실패", f"[{name}] {level}단계에서 멈췄습니다. 재시도하시겠습니까?", QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
-                self.current_resume_task_id = task_id
-                self.active_log_task_id = task_id # 로그 타겟 변경
-                self.wizard.task_name_edit.setText(name)
-                self.wizard.task_name_edit.setDisabled(True) # 이름 수정 방지
-                
-                if level == 1:
-                    self.wizard.stack.setCurrentIndex(1) # 데이터 구축 페이지로
-                elif level == 2:
-                    self.wizard.stack.setCurrentIndex(2) # 학습 설정 페이지로
-                return
-
-        if status == "SUCCESS":
-            self.active_log_task_id = task_id # 로그 타겟 변경
+        # 팝업 다이얼로그 띄워 기어이 직접 조작 선택 기회 제공!
+        dialog = TaskActionDialog(self.ctx, task_data, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return # 사용자가 닫기를 누름
+            
+        action = dialog.selected_action
+        
+        if action == "view_report":
             if level == 1:
-                if QMessageBox.question(self, "1단계 완료", "2단계(학습) 설정으로 이동할까요?", QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
-                    self.current_resume_task_id = task_id
-                    self.wizard.task_name_edit.setText(name)
-                    self.wizard.task_name_edit.setEnabled(False)
-                    self.wizard.stack.setCurrentIndex(2) # SOP 2단계(학습)
-            elif level == 2:
-                if QMessageBox.question(self, "2단계 완료", "3단계(최적화) 설정으로 이동할까요?", QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
-                    self.wizard.stack.setCurrentIndex(3) # SOP 3단계(최적화)
-                    idx = self.wizard.export_task_cb.findData(task_id)
-                    if idx >= 0: self.wizard.export_task_cb.setCurrentIndex(idx)
+                # 1단계 무결성 검수 리포트 열기
+                val_report_path = os.path.join(self.ctx.base_dir or "c:/ameva/AMEVA-STT-Trainer", "dataset", f"{name}_{task_id[:8]}", "validation_report.md")
+                if os.path.exists(val_report_path):
+                    viewer = CSVViewer(self.ctx, val_report_path)
+                    self.tabs.addTab(viewer, f"📊 {name} 검수 보고서")
+                    self.tabs.setCurrentWidget(viewer)
+                else:
+                    QMessageBox.warning(self, "오류", "데이터셋 검수 리포트(validation_report.md)를 찾을 수 없습니다.")
             elif level == 3:
                 data = self.ctx.api.get(f"/api/v1/tasks/report?task_id={task_id}")
                 if data:
                     self.report = ReportWindow(self.ctx, data)
                     self.report.show()
+                else:
+                    QMessageBox.warning(self, "오류", "리포트를 불러올 수 없습니다.")
+            else:
+                QMessageBox.information(self, "안내", "이 단계의 리포트가 없습니다. 상세 로그는 모니터링 화면이나 왼쪽 로그창을 분석해주세요.")
+                
+        elif action == "next_stage":
+            self.current_resume_task_id = task_id
+            self.active_log_task_id = task_id # [초밀착 연동] 불러오는 즉시 과거 로그 패널 소환
+            self.wizard.task_name_edit.setText(name)
+            self.wizard.task_name_edit.setEnabled(False)
+            if level == 1:
+                self.wizard.stack.setCurrentIndex(2) # 2단계(학습)로 이동
+            elif level == 2:
+                self.wizard.stack.setCurrentIndex(3) # 3단계(최적화)로 이동
+                idx = self.wizard.export_task_cb.findData(task_id)
+                if idx >= 0: self.wizard.export_task_cb.setCurrentIndex(idx)
+                
+        elif action == "retry_stage":
+            self.current_resume_task_id = None
+            self.active_log_task_id = task_id # [초밀착 연동] 불러오는 즉시 과거 로그 패널 소환
+            self.wizard.task_name_edit.setText(name)
+            self.wizard.task_name_edit.setEnabled(True)
+            if level == 1:
+                self.wizard.stack.setCurrentIndex(1) # 1단계로 이동해 재설정 시작
+            elif level == 2:
+                self.wizard.stack.setCurrentIndex(2) # 2단계로 이동해 재설정 시작
+            elif level == 3:
+                self.wizard.stack.setCurrentIndex(3) # 3단계로 이동해 재설정 시작
+                
+        elif action == "resume_stage":
+            self.current_resume_task_id = task_id
+            self.active_log_task_id = task_id # [초밀착 연동] 불러오는 즉시 과거 로그 패널 소환
+            self.wizard.task_name_edit.setText(name)
+            self.wizard.task_name_edit.setEnabled(False)
+            self.wizard.stack.setCurrentIndex(2) # 2단계 설정 화면으로 이동하여 이어서 학습 시작 준비
 
     def run_export_pipeline(self):
         """UI에서 설정한 파라미터로 모델 내보내기/양자화 공정 실행"""
@@ -469,6 +534,15 @@ class DashboardWindow(QMainWindow):
 
     def update_cpu_affinity(self, val):
         self.ctx.api.post("/api/v1/hardware/affinity", {"cores": val})
+
+    def clear_resume_context(self):
+        """과거 이어하기/재수행에 할당되었던 모든 메모리 컨텍스트 영구 정화"""
+        self.current_resume_task_id = None
+        self.wizard.task_name_edit.setEnabled(True)
+        self.wizard.task_name_edit.clear()
+        self.active_log_task_id = None
+        self.wizard.task_list_widget.clearSelection()
+        self.wizard.task_list_widget.setCurrentRow(-1)
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)

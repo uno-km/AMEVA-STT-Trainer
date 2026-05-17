@@ -90,10 +90,10 @@ DEFAULTS = {
 
     # WandB
     "wandb": {
-        "enabled"       : True,
+        "enabled"       : False,
         "project"       : "AMEVA-STT-Trainer",
-        "mode"          : "online",
-        "log_artifacts" : True,
+        "mode"          : "disabled",
+        "log_artifacts" : False,
     }
 }
 

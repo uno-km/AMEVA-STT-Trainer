@@ -212,12 +212,23 @@ class DatabaseManager:
     def add_task_dtl(self, task_id: str, step_seq: int, step_name: str, parameters: str, next_step: int = None) -> int:
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute('''
-                INSERT INTO tb_task_dtl (task_id, step_seq, step_name, parameters, next_step) 
-                VALUES (?, ?, ?, ?, ?)
-            ''', (task_id, step_seq, step_name, parameters, next_step))
+            cursor.execute('SELECT dtl_id FROM tb_task_dtl WHERE task_id=? AND step_seq=?', (task_id, step_seq))
+            row = cursor.fetchone()
+            if row:
+                cursor.execute('''
+                    UPDATE tb_task_dtl 
+                    SET step_name=?, parameters=?, next_step=?, status='PENDING'
+                    WHERE dtl_id=?
+                ''', (step_name, parameters, next_step, row['dtl_id']))
+                dtl_id = row['dtl_id']
+            else:
+                cursor.execute('''
+                    INSERT INTO tb_task_dtl (task_id, step_seq, step_name, parameters, next_step) 
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (task_id, step_seq, step_name, parameters, next_step))
+                dtl_id = cursor.lastrowid
             conn.commit()
-            return cursor.lastrowid
+            return dtl_id
 
     # --- 데이터셋/청크 관리 (복구됨) ---
     def create_metadata(self, task_id: str, file_name: str, folder_path: str) -> int:

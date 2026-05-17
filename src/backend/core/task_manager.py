@@ -13,32 +13,59 @@ class TaskManager:
         self.base_dir = r"c:\ameva\AMEVA-STT-Trainer"
         self.active_processes = {} # 실행 중인 프로세스 추적용
 
-    def init_data(self, name, source_type="youtube", url="", count=5, folder=""):
-        """[1단계] 태스크를 생성하고 데이터 전처리 스크립트를 독립적으로 가동합니다."""
+    def init_data(self, name, step_limit=1, step1_params=None, step2_params=None, step3_params=None):
+        """[1단계] 태스크를 생성하고, 사용자의 체이닝 설계에 따라 1/2/3단계 파라미터를 분할 저장합니다."""
+        step1_params = step1_params or {}
+        
         task_id = db_manager.create_task(name)
         db_manager.update_task_status(task_id, 1, "RUNNING", "Step 1: Data Preparation starting...")
         
         task_folder = os.path.join(self.base_dir, "dataset", f"{name}_{task_id[:8]}")
         os.makedirs(task_folder, exist_ok=True)
         
-        params = {"name": name, "source_type": source_type, "url": url, "count": count, "folder": folder, "output_dir": task_folder}
-        db_manager.add_task_dtl(task_id, step_seq=1, step_name="Data Prep", parameters=json.dumps(params), next_step=None)
+        # 1단계 설정 (2단계까지 원했다면 next_step=2)
+        s1_params = step1_params.copy()
+        s1_params["output_dir"] = task_folder
+        s1_params["name"] = f"{name}_{task_id[:8]}"
+        next_step1 = 2 if step_limit >= 2 else None
+        db_manager.add_task_dtl(task_id, step_seq=1, step_name="Data Prep", parameters=json.dumps(s1_params), next_step=next_step1)
         
+        # 2단계 체이닝 설정
+        if step_limit >= 2 and step2_params:
+            next_step2 = 3 if step_limit == 3 else None
+            db_manager.add_task_dtl(task_id, step_seq=2, step_name="Training", parameters=json.dumps(step2_params), next_step=next_step2)
+            
+        # 3단계 체이닝 설정
+        if step_limit == 3 and step3_params:
+            db_manager.add_task_dtl(task_id, step_seq=3, step_name="Export", parameters=json.dumps(step3_params), next_step=None)
+            
         import sys
         cmd = [sys.executable, "scripts/01_build_dataset.py"]
-        if source_type == "youtube": cmd.extend(["--youtube", url, "--count", str(count)])
-        else: cmd.extend(["--folder", folder])
+        source_type = s1_params.get("source_type", "youtube")
+        if source_type == "youtube": 
+            cmd.extend(["--source_type", "youtube", "--url", s1_params.get("url", ""), "--count", str(s1_params.get("count", 5))])
+        else: 
+            cmd.extend(["--source_type", "local", "--folder", s1_params.get("folder", "")])
         cmd.extend(["--name", f"{name}_{task_id[:8]}"])
         
         self._run_script_async(cmd, task_id, level=1)
         return {"id": task_id, "name": name, "path": task_folder}
 
-    def start_train(self, task_id: str, train_params: str):
-        """학습(2단계)을 시작합니다. 설정에 따라 3단계 자동 배포 정보를 파이프라인 설정에 저장합니다."""
+    def start_train(self, task_id: str, step_limit=2, step2_params=None, step3_params=None):
+        """[2단계] 이어하기 시작. 2단계 및 3단계 파라미터를 tb_task_dtl에 연쇄 저장합니다."""
         from src.backend.core.database import db_manager
-        db_manager.update_task_status(task_id, 2, "RUNNING", "Step 2: Training starting...", pipeline_config=train_params)
+        db_manager.update_task_status(task_id, 2, "RUNNING", "Step 2: Training starting...")
         
-        self._run_training_script(task_id, json.loads(train_params))
+        # 2단계 정보 갱신
+        if step2_params:
+            next_step2 = 3 if step_limit == 3 else None
+            db_manager.add_task_dtl(task_id, step_seq=2, step_name="Training", parameters=json.dumps(step2_params), next_step=next_step2)
+            
+        # 3단계 정보 갱신
+        if step_limit == 3 and step3_params:
+            db_manager.add_task_dtl(task_id, step_seq=3, step_name="Export", parameters=json.dumps(step3_params), next_step=None)
+            
+        self._run_training_script(task_id, step2_params or {})
         return {"id": task_id, "status": "Training Started"}
 
     def _run_script_async(self, cmd, task_id, level=2):
@@ -83,32 +110,17 @@ class TaskManager:
                         f.flush()
                     process.wait()
                     
-                    # 종료 상태 DB 반영 및 Auto-Chaining
+                    # 종료 상태 DB 반영 및 순수 DB 기반 Auto-Chaining
                     from src.backend.core.database import db_manager
                     
                     if process.returncode == 0:
                         db_manager.update_task_status(task_id, level, "SUCCESS", f"Exit Code: 0")
-                        f.write(f"\n--- [AMEVA Engine] 공정 성공 ---\n")
                         
-                        task = db_manager.get_task_details(task_id)
-                        cfg = json.loads(task['pipeline_config']) if task and task.get('pipeline_config') else {}
-                        
-                        # 1단계 -> 2단계 연쇄 가동!
-                        if level == 1:
-                            f.write(f"\n--- [Auto-Chaining] 2단계 모델 학습(Training) 자동 시작! ---\n")
-                            train_params = json.dumps({"task_id": task_id, "max_steps": cfg.get("max_steps", 100), "auto_export": cfg.get("auto_export", True), "method": cfg.get("method", "q4_0")})
-                            self.start_train(task_id, train_params)
-                            
-                        # 2단계 -> 3단계 연쇄 가동!
-                        elif level == 2 and cfg.get('auto_export', False):
-                            f.write(f"\n--- [Auto-Chaining] 3단계 모델 배포(Export) 자동 시작! ---\n")
-                            import sys
-                            export_cmd = [sys.executable, "scripts/03_export_model.py", "--method", cfg.get('method', 'gguf')]
-                            db_manager.update_task_status(task_id, 3, "RUNNING", "Step 3: Auto Export starting...")
-                            self._run_script_async(export_cmd, task_id, level=3)
+                        # DB의 tb_task_dtl(next_step)을 조회하여 연쇄 가동 실행
+                        self.trigger_next_step(task_id)
                                     
                     else:
-                        checkpoint = self._find_latest_checkpoint() if level == 2 else None
+                        checkpoint = self._find_latest_checkpoint(task_id) if level == 2 else None
                         db_manager.update_task_status(task_id, level, "FAILED", f"Exit Code: {process.returncode}", checkpoint_path=checkpoint)
                         if checkpoint:
                             f.write(f"\n--- [AMEVA Engine] 치명적 오류. 최신 체크포인트 보존됨: {checkpoint} ---\n")
@@ -121,7 +133,7 @@ class TaskManager:
                     f.write(f"\n[FATAL ERROR] 서브프로세스 기동 중 치명적 오류: {str(e)}\n")
                     f.write(f"상세 정보: {traceback.format_exc()}\n")
                 from src.backend.core.database import db_manager
-                checkpoint = self._find_latest_checkpoint() if level == 2 else None
+                checkpoint = self._find_latest_checkpoint(task_id) if level == 2 else None
                 db_manager.update_task_status(task_id, level, "FAILED", f"Error: {str(e)}", checkpoint_path=checkpoint)
             finally:
                 if task_id in self.active_processes:
@@ -153,7 +165,9 @@ class TaskManager:
         if next_dtl:
             step_name = next_dtl['step_name']
             params = json.loads(next_dtl['parameters'])
-            logger.info(f"🚀 Task {task_id}: 다음 공정 [{step_name}] 자동 시작!")
+            
+            # DB 상태를 다음 단계로 격상
+            db_manager.update_task_status(task_id, next_step_id, "RUNNING", f"Step {next_step_id}: {step_name} starting (Auto-Chained)")
             
             if params.get("action") == "start_training":
                 self._run_training_script(task_id, params)
@@ -249,5 +263,22 @@ class TaskManager:
                 return "".join(lines[-200:])
         except Exception as e:
             return f"로그 읽기 오류: {str(e)}"
+
+    def _find_latest_checkpoint(self, task_id: str) -> str:
+        """태스크 폴더에서 가장 최근 생성된 LoRA 체크포인트 폴더 경로를 반환합니다."""
+        if not task_id: return None
+        try:
+            task = db_manager.get_task_details(task_id)
+            if not task: return None
+            tsk_nm = task.get('tsk_nm', 'task')
+            lora_dir = os.path.join(self.base_dir, "outputs", f"{tsk_nm}_{task_id[:8]}")
+            if os.path.exists(lora_dir):
+                ckpts = [d for d in os.listdir(lora_dir) if d.startswith("checkpoint-")]
+                if ckpts:
+                    latest = sorted(ckpts, key=lambda x: int(x.split("-")[-1]))[-1]
+                    return os.path.join(lora_dir, latest)
+        except Exception as e:
+            logger.error(f"체크포인트 탐색 오류: {e}")
+        return None
 
 task_manager = TaskManager()

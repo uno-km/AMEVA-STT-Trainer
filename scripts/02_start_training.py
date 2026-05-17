@@ -10,8 +10,8 @@ import io
 
 # 윈도우 터미널 한글 깨짐 방지
 if sys.platform == 'win32':
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', line_buffering=True)
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', line_buffering=True)
 
 import psutil
 import argparse
@@ -102,15 +102,24 @@ def main():
 
     # 2. WandB 초기화 (설정된 경우)
     if CFG["wandb"]["enabled"]:
-        import wandb
-        os.environ["WANDB_PROJECT"] = CFG["wandb"]["project"]
-        os.environ["WANDB_MODE"] = CFG["wandb"]["mode"]
-        wandb.init(
-            project=CFG["wandb"]["project"],
-            config=CFG,
-            name=f"Roadmap-{CFG['model_id'].split('/')[-1]}-Step{CFG['max_steps']}"
-        )
-        logger.info(f"[WandB] '{CFG['wandb']['project']}' 프로젝트로 로그 전송 시작 (Mode: {CFG['wandb']['mode']})")
+        try:
+            import wandb
+            os.environ["WANDB_PROJECT"] = CFG["wandb"]["project"]
+            os.environ["WANDB_MODE"] = CFG["wandb"]["mode"]
+            wandb.init(
+                project=CFG["wandb"]["project"],
+                config=CFG,
+                name=f"Roadmap-{CFG['model_id'].split('/')[-1]}-Step{CFG['max_steps']}"
+            )
+            logger.info(f"[WandB] '{CFG['wandb']['project']}' 프로젝트로 로그 전송 시작 (Mode: {CFG['wandb']['mode']})")
+        except Exception as e:
+            logger.info(f"⚠️ [WandB] 로그인 실패 혹은 API Key 미설정으로 인해 비활성화 모드로 가동합니다. (사유: {str(e)})")
+            try:
+                import wandb
+                os.environ["WANDB_MODE"] = "disabled"
+                wandb.init(mode="disabled")
+            except:
+                pass
 
     # 3. 학습 실행
     task_id = args.task_id if args.task_id else os.environ.get("CURRENT_TASK_ID")
