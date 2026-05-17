@@ -20,6 +20,13 @@ class TaskManager:
         task_id = db_manager.create_task(name)
         db_manager.update_task_status(task_id, 1, "RUNNING", "Step 1: Data Preparation starting...")
         
+        # [쓰레드 설정 실시간 기록] 초기 할당된 쓰레드 정보 DB 저장
+        try:
+            from src.backend.hardware.resource_manager import hw_manager
+            db_manager.add_thread_log(task_id, hw_manager.allocated_cores)
+        except Exception as e:
+            print(f"[Initial Thread Log Error] {e}")
+        
         task_folder = os.path.join(self.base_dir, "dataset", f"{name}_{task_id[:8]}")
         os.makedirs(task_folder, exist_ok=True)
         
@@ -54,8 +61,14 @@ class TaskManager:
     def start_train(self, task_id: str, step_limit=2, step2_params=None, step3_params=None):
         """[2단계] 이어하기 시작. 2단계 및 3단계 파라미터를 tb_task_dtl에 연쇄 저장합니다."""
         from src.backend.core.database import db_manager
-        db_manager.update_task_status(task_id, 2, "RUNNING", "Step 2: Training starting...")
         
+        # [쓰레드 설정 실시간 기록] 초기 할당된 쓰레드 정보 DB 저장
+        try:
+            from src.backend.hardware.resource_manager import hw_manager
+            db_manager.add_thread_log(task_id, hw_manager.allocated_cores)
+        except Exception as e:
+            print(f"[Initial Thread Log Error] {e}")
+            
         # 2단계 정보 갱신
         if step2_params:
             next_step2 = 3 if step_limit == 3 else None
@@ -65,6 +78,19 @@ class TaskManager:
         if step_limit == 3 and step3_params:
             db_manager.add_task_dtl(task_id, step_seq=3, step_name="Export", parameters=json.dumps(step3_params), next_step=None)
             
+        # [해결] 이미 2단계 학습에 진입했었던 이력이 있고(level >= 2), 사용자가 3단계(내보내기) 실행을 지시한 경우 (성공/중단 여부 무관)
+        task = db_manager.get_task_details(task_id)
+        current_level = task.get('level', 1) if task else 1
+        
+        is_step2_attempted = (current_level >= 2)
+        
+        if is_step2_attempted and step_limit == 3:
+            db_manager.update_task_status(task_id, 3, "RUNNING", "Step 3: Export/Quantization starting...")
+            self._run_export_script(task_id, step3_params or {})
+            return {"id": task_id, "status": "Export Started"}
+            
+        # 기본값: 2단계 학습 가동 (이어하기의 경우 최근 체크포인트 자동 반영됨)
+        db_manager.update_task_status(task_id, 2, "RUNNING", "Step 2: Training starting...")
         self._run_training_script(task_id, step2_params or {})
         return {"id": task_id, "status": "Training Started"}
 
@@ -180,9 +206,11 @@ class TaskManager:
             # DB 상태를 다음 단계로 격상
             db_manager.update_task_status(task_id, next_step_id, "RUNNING", f"Step {next_step_id}: {step_name} starting (Auto-Chained)")
             
-            if params.get("action") == "start_training":
+            if next_step_id == 1:
+                self._run_data_script(task_id, params)
+            elif next_step_id == 2:
                 self._run_training_script(task_id, params)
-            elif params.get("action") == "export_model":
+            elif next_step_id == 3:
                 self._run_export_script(task_id, params)
 
     def _run_data_script(self, task_id, params):
@@ -195,7 +223,8 @@ class TaskManager:
             "--count", str(params.get("count", 5)),
             "--folder", params.get("folder", "")
         ]
-        self._run_script_async(cmd, task_id)
+        # [버그 방어] 1단계 가동 시 명확히 level=1 명시
+        self._run_script_async(cmd, task_id, level=1)
 
     def _run_training_script(self, task_id, params):
         import sys
@@ -224,7 +253,8 @@ class TaskManager:
         ]
         if params.get("no_quantize"):
             cmd.append("--no-quantize")
-        self._run_script_async(cmd, task_id)
+        # [무한 루프 버그 완전 해결] 3단계 가동 시 명확히 level=3 명시!
+        self._run_script_async(cmd, task_id, level=3)
 
     def force_stop_task(self, task_id: str):
         """실행 중인 프로세스를 강제 종료하고 상태를 업데이트합니다."""

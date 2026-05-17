@@ -46,7 +46,7 @@ class WhisperQuantizer:
         return assets_dir
 
     def build_quantizer(self):
-        """quantize 도구가 없으면 컴파일(make)을 시도한다."""
+        """quantize 도구가 없으면 컴파일(make) 또는 Windows용 프리빌드 바이너리 자동 다운로드를 시도한다."""
         if not os.path.exists(self.quantize_bin):
             logger.info("양자화 도구(quantize)가 없습니다. 컴파일을 시도합니다...")
             try:
@@ -55,6 +55,49 @@ class WhisperQuantizer:
                 logger.info("✅ quantize 도구 빌드 성공")
             except Exception as e:
                 logger.info(f"⚠️ 빌드 실패: {e}. 컴파일러(make/gcc) 환경이 필요합니다.")
+                
+                # Windows 환경이고 C++ 컴파일러가 없다면, 공식 프리빌드 바이너리 자가 복구 가동!
+                if os.name == 'nt':
+                    logger.info("⚙️ [Windows 자가 복구] 공식 whisper-bin-x64 패키지에서 사전 컴파일된 양자화 도구와 DLL 일괄 다운로드를 개시합니다...")
+                    try:
+                        import urllib.request
+                        import zipfile
+                        import io
+                        
+                        url = "https://github.com/ggml-org/whisper.cpp/releases/download/v1.8.4/whisper-bin-x64.zip"
+                        headers = {'User-Agent': 'Mozilla/5.0'}
+                        req = urllib.request.Request(url, headers=headers)
+                        
+                        with urllib.request.urlopen(req) as response:
+                            zip_data = response.read()
+                            with zipfile.ZipFile(io.BytesIO(zip_data)) as z:
+                                # 1. 동봉된 모든 동적 라이브러리(DLL) 파일 이식
+                                for name in z.namelist():
+                                    if name.endswith(".dll"):
+                                        base_name = os.path.basename(name)
+                                        dest_path = os.path.join(self.whisper_cpp_dir, base_name)
+                                        with open(dest_path, "wb") as f:
+                                            f.write(z.read(name))
+                                        logger.info(f"   DLL 복구 완료: {base_name}")
+                                
+                                # 2. whisper-quantize.exe -> quantize.exe 매핑 이식
+                                target_exe = None
+                                for name in z.namelist():
+                                    if "quantize" in name.lower() and name.endswith(".exe"):
+                                        target_exe = name
+                                        break
+                                        
+                                if target_exe:
+                                    with open(self.quantize_bin, "wb") as f:
+                                        f.write(z.read(target_exe))
+                                    logger.info(f"   EXE 복구 완료: {os.path.basename(target_exe)} -> quantize.exe")
+                                else:
+                                    logger.error("❌ 압축 팩 내부에서 양자화 바이너리를 찾지 못했습니다.")
+                                    
+                        logger.info("✅ [Windows 자가 복구 완료] 모든 최적화 런타임 자산이 완벽하게 이식되었습니다!")
+                    except Exception as fallback_err:
+                        logger.error(f"❌ [Windows 자가 복구 실패] 바이너리 복구 도중 치명적 에러 발생: {fallback_err}")
+                        
         return os.path.exists(self.quantize_bin)
 
     def quantize_existing_bin(self, source_bin: str, final_name: str, method: str = "q4_0"):

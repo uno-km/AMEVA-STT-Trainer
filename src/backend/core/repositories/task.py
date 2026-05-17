@@ -39,16 +39,22 @@ class TaskRepository(BaseRepository):
                       checkpoint_path: str = None, pipeline_config: str = None):
         """태스크의 공정 단계(Level), 성공/실패 여부(Status) 및 부가 산출물 경로를 업데이트하고 로그를 병합 적재합니다."""
         stts_dt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        # [중단 감지 및 상태 정교화] 사용자가 중단 버튼을 누른 경우 status를 'CANCELED'로 격상!
+        if log_msg and ("사용자에 의해 강제 종료" in log_msg or "중단되었습니다" in log_msg):
+            status = "CANCELED"
+            
         log_id = None
         if log_msg:
             # logs 레포지토리 또는 Facade 위임 호출로 무결성 연결
             log_id = self.db.logs.add(
-                "INFO" if status == "SUCCESS" else "ERROR" if status == "FAILED" else "INFO", 
+                "INFO" if status == "SUCCESS" else "WARNING" if status == "CANCELED" else "ERROR" if status == "FAILED" else "INFO", 
                 log_msg, 
                 task_id
             )
             
         with self.get_connection() as conn:
+            # 1. tb_task 마스터 테이블 상태 업데이트
             sql = "UPDATE tb_task SET level = ?, status = ?, stts_dt = ?"
             params = [level, status, stts_dt]
             if log_id:
@@ -69,6 +75,22 @@ class TaskRepository(BaseRepository):
             sql += " WHERE id = ?"
             params.append(task_id)
             conn.cursor().execute(sql, params)
+            
+            # 2. tb_task_dtl 하위 단계의 개별 status 도 완벽하게 동기화!
+            conn.cursor().execute(
+                "UPDATE tb_task_dtl SET status = ? WHERE task_id = ? AND step_seq = ?",
+                (status, task_id, level)
+            )
+            
+            # 3. [자가 치유 - Self-healing] 2단계나 3단계 도중 취소/실패했다면, 이전 공정(1단계 혹은 2단계)은
+            # 이미 완벽하게 완료된 것이 확실하므로 SUCCESS 상태로 자동 보정 보존해 줍니다!
+            if status in ["FAILED", "CANCELED"] and level > 1:
+                for prev_level in range(1, level):
+                    conn.cursor().execute(
+                        "UPDATE tb_task_dtl SET status = 'SUCCESS' WHERE task_id = ? AND step_seq = ?",
+                        (task_id, prev_level)
+                    )
+            
             conn.commit()
 
     def add_detail(self, task_id: str, step_seq: int, step_name: str, parameters: str, next_step: int = None) -> int:

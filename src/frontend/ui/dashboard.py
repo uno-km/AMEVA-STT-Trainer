@@ -72,7 +72,7 @@ class DashboardWindow(QMainWindow):
         # 데이터 폴링 타이머 가동 (Presenter 바인딩)
         self.poll_timer = QTimer()
         self.poll_timer.timeout.connect(self.presenter.poll_data)
-        self.poll_timer.start(2000)
+        self.poll_timer.start(500)
         
         # 최초 1회 즉시 과거 리스트 최신화
         self.presenter.sync_task_list()
@@ -162,8 +162,14 @@ class DashboardWindow(QMainWindow):
         
         self.chart_loss = ChartWidget("LOSS TREND", self.ctx.get_color('error'))
         self.chart_hw = ChartWidget("CPU USAGE", self.ctx.get_color('accent'))
+        self.chart_hw.chart.y_min = 0.0
+        self.chart_hw.chart.y_max = 100.0
+        self.chart_hw.chart.y_suffix = "%"
+        
         self.chart_speed = ChartWidget("SPEED (T/s)", self.ctx.get_color('warning'))
         self.chart_metric = ChartWidget("ACCURACY", self.ctx.get_color('success'))
+        self.chart_metric.chart.y_min = 0.0
+        self.chart_metric.chart.y_max = 1.0
         
         self.charts = [self.chart_loss, self.chart_hw, self.chart_speed, self.chart_metric]
         for i, c in enumerate(self.charts):

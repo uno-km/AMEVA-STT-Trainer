@@ -129,8 +129,18 @@ class WizardPanel(QWidget):
             if step_lv < level:
                 lbl.setText("✅ 완료"); lbl.setStyleSheet(f"color: {self.ctx.get_color('success')}; border: none;")
             elif step_lv == level:
-                txt = "⏳ 진행 중" if status == "RUNNING" else ("✅ 완료" if status == "SUCCESS" else "❌ 실패")
-                color = self.ctx.get_color("warning") if status == "RUNNING" else (self.ctx.get_color("success") if status == "SUCCESS" else self.ctx.get_color("error"))
+                if status == "RUNNING":
+                    txt = "⏳ 진행 중"
+                    color = self.ctx.get_color("warning")
+                elif status == "SUCCESS":
+                    txt = "✅ 완료"
+                    color = self.ctx.get_color("success")
+                elif status == "CANCELED":
+                    txt = "🛑 중단됨"
+                    color = self.ctx.get_color("error")
+                else:
+                    txt = "❌ 실패"
+                    color = self.ctx.get_color("error")
                 lbl.setText(txt); lbl.setStyleSheet(f"color: {color}; font-weight: bold; border: none;")
             else:
                 lbl.setText("💤 대기"); lbl.setStyleSheet(f"color: {self.ctx.get_color('text_dim')}; border: none;")
@@ -182,6 +192,9 @@ class WizardPanel(QWidget):
             if "진행 중" in self.mon_steps[2].text() or "완료" in self.mon_steps[2].text():
                 return
                 
+            # [버그 완전 예방] 3단계 설정 화면으로 진입할 때도 태스크 이름을 버퍼에 강제 복원 및 비활성화
+            self.task_name_edit.setText(task_name)
+            self.task_name_edit.setEnabled(False)
             self.stack.setCurrentIndex(3)
             
             task_id = None

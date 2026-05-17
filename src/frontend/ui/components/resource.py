@@ -103,8 +103,21 @@ class ResourcePanel(QFrame):
     def on_slider_changed(self, val):
         """슬라이더 조정 즉시 실시간으로 코어 배분 API 전송"""
         self.aff_lbl.setText(f"Cores: {val}/{self.total_cores}")
+        
+        # 메인 윈도우 및 프리젠터에서 현재 활성화된 태스크 ID 역추적
+        task_id = None
+        parent = self.parentWidget()
+        while parent is not None:
+            if hasattr(parent, 'presenter'):
+                task_id = parent.presenter.active_log_task_id
+                break
+            parent = parent.parentWidget()
+            
         try:
-            self.ctx.api.post("/api/v1/hardware/affinity", {"cores": val})
+            payload = {"cores": val}
+            if task_id:
+                payload["task_id"] = task_id
+            self.ctx.api.post("/api/v1/hardware/affinity", payload)
         except Exception as e:
             print(f"[Affinity Bind Error] {e}")
             

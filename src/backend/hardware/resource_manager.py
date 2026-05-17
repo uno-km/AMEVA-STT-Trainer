@@ -71,4 +71,16 @@ def get_hardware_status():
 @router.post("/api/v1/hardware/affinity")
 def update_affinity(body: dict):
     cores = body.get("cores", hw_manager.total_cores)
-    return hw_manager.set_cpu_affinity(cores)
+    task_id = body.get("task_id")
+    
+    # 1. 실제 프로세스 친화도 설정
+    res = hw_manager.set_cpu_affinity(cores)
+    
+    # 2. DB 기록 수행 (태스크 ID가 지정된 경우)
+    if task_id and res.get("success"):
+        from src.backend.core.database import db_manager
+        db_manager.add_thread_log(task_id, cores)
+        # 중요 로그로 남기기
+        db_manager.add_log("INFO", f"[HARDWARE] CPU 할당 쓰레드 수가 {cores}개로 변경되었습니다.", task_id)
+        
+    return res

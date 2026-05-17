@@ -40,8 +40,11 @@ class TaskActionDialog(QDialog):
         if status == "SUCCESS":
             state_desc += "성공 완료 ✅"
             color = ctx.get_color("success")
+        elif status == "CANCELED":
+            state_desc += "사용자 중단 🛑"
+            color = ctx.get_color("error")
         elif status == "FAILED":
-            state_desc += "실패/중단 ❌"
+            state_desc += "실패 완료 ❌"
             color = ctx.get_color("error")
         else:
             state_desc += "진행 중 ⏳"
@@ -63,7 +66,7 @@ class TaskActionDialog(QDialog):
             self.add_btn("🔄 1단계 데이터 구축 처음부터 재수행", "retry_stage")
         elif level == 2:
             self.add_btn("➡️ 3단계 모델 최적화/내보내기 설정으로 이동", "next_stage", ctx.get_color('accent'))
-            if status == "FAILED" or status == "STOPPED":
+            if status in ["FAILED", "CANCELED", "STOPPED"]:
                 self.add_btn("🛠️ 직전 체크포인트부터 이어서 학습 재개 (Resume)", "resume_stage", ctx.get_color('warning'))
             self.add_btn("🔄 2단계 모델 학습 처음부터 재수행", "retry_stage")
             self.add_btn("🔍 지금까지 적재된 로그/보고서 확인", "view_report")

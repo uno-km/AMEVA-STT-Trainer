@@ -19,6 +19,8 @@ class DashboardPresenter:
         # 활성 상태 변수 격리 보관
         self.active_log_task_id = None
         self.current_resume_task_id = None
+        self.pipeline_mode = "NEW" # "NEW" or "RESUME"
+        self.last_explorer_task_id = -1 # 파일 탐색기 필터링 갱신용 센티널 변수
 
     def poll_data(self):
         """서버로부터 실시간 데이터를 폴링하여 View를 동적으로 갱신 (예외 완전 방어)"""
@@ -58,11 +60,30 @@ class DashboardPresenter:
                 if logs_res and isinstance(logs_res, dict) and "logs" in logs_res:
                     self.view.log_panel.update_logs(logs_res['logs'])
             
-            # 5. 파일 탐색기 최초 1회 초기화
-            if self.view.explorer.tree.topLevelItemCount() == 0:
+            # 5. 파일 탐색기 동적 동기화 (최초 1회 혹은 활성 태스크 전환 시점 자동 리빌드)
+            current_active_id = self.active_log_task_id
+            if self.view.explorer.tree.topLevelItemCount() == 0 or current_active_id != getattr(self, 'last_explorer_task_id', -1):
+                self.last_explorer_task_id = current_active_id
+                
+                # 활성 태스크의 고유 명칭(tsk_nm) DB 역조회
+                active_name = None
+                if current_active_id:
+                    try:
+                        import sqlite3
+                        db_path = os.path.join(self.ctx.base_dir or "c:/ameva/AMEVA-STT-Trainer", "db/stt_trainer.db")
+                        conn = sqlite3.connect(db_path)
+                        cursor = conn.cursor()
+                        cursor.execute("SELECT tsk_nm FROM tb_task WHERE id = ?", (current_active_id,))
+                        row = cursor.fetchone()
+                        if row:
+                            active_name = row[0]
+                        conn.close()
+                    except Exception as e:
+                        print(f"[Presenter Explorer Name Resolve Error] {e}")
+                
                 files = self.ctx.api.get("/api/v1/files/explorer")
-                if files and isinstance(files, list): 
-                    self.view.explorer.update_data(files)
+                if files and isinstance(files, dict): 
+                    self.view.explorer.update_data(files, active_task_id=current_active_id, active_task_name=active_name)
 
             # 6. 관제 대시보드 상태 레이블 최종 동기화
             self.sync_task_status_to_monitor()
@@ -100,7 +121,8 @@ class DashboardPresenter:
                         )
                         self.view.toggle_ui_lock(False)
                     else:
-                        self.view.stage_label.setText(f"Stage: {status}")
+                        display_status = "중단됨" if status == "CANCELED" else "실패"
+                        self.view.stage_label.setText(f"Stage: {display_status}")
                         self.view.stage_label.setStyleSheet(
                             f"color: {self.ctx.get_color('error')}; background-color: {self.ctx.get_color('bg_panel')}; padding: 5px 12px; border-radius: 6px;"
                         )
@@ -113,7 +135,25 @@ class DashboardPresenter:
         task_id = self.current_resume_task_id
         
         self.view.toggle_ui_lock(True)
-        if not task_id:
+        
+        # 만약 RESUME 모드인데 task_id가 휘발되었다면 이름 기반으로 복구
+        if self.pipeline_mode == "RESUME" and not task_id:
+            if name:
+                try:
+                    import sqlite3
+                    db_path = os.path.join(self.ctx.base_dir or "c:/ameva/AMEVA-STT-Trainer", "db/stt_trainer.db")
+                    conn = sqlite3.connect(db_path)
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT id FROM tb_task WHERE tsk_nm = ? ORDER BY create_dt DESC LIMIT 1", (name,))
+                    row = cursor.fetchone()
+                    if row:
+                        task_id = row[0]
+                        self.current_resume_task_id = task_id
+                    conn.close()
+                except Exception as e:
+                    print(f"[Presenter Self-healing Error] {e}")
+        
+        if self.pipeline_mode == "NEW":
             # 1. 완전 신규 태스크 생성 제어
             if not name:
                 QMessageBox.warning(self.view, "경고", "태스크 이름을 입력해주세요.")
@@ -160,8 +200,23 @@ class DashboardPresenter:
                 self.view.toggle_ui_lock(False)
                 return
             task_id = res["id"]
+            self.current_resume_task_id = task_id
         else:
-            # 2. 기존 중단 태스크 이어하기(Resume) 데이터 빌딩
+            # 2. 기존 중단 태스크 이어하기(RESUME) 데이터 빌딩 및 업데이트
+            if not name and task_id:
+                try:
+                    import sqlite3
+                    db_path = os.path.join(self.ctx.base_dir or "c:/ameva/AMEVA-STT-Trainer", "db/stt_trainer.db")
+                    conn = sqlite3.connect(db_path)
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT tsk_nm FROM tb_task WHERE id = ?", (task_id,))
+                    row = cursor.fetchone()
+                    if row:
+                        name = row[0]
+                    conn.close()
+                except Exception as e:
+                    name = "Resumed Task"
+                    
             payload_train = {
                 "task_id": task_id,
                 "step_limit": step,
@@ -186,9 +241,8 @@ class DashboardPresenter:
         self.view.wizard.stack.setCurrentIndex(6) 
         self.view.wizard.update_monitor(name, step, "RUNNING")
         
-        self.current_resume_task_id = None
-        self.view.wizard.task_name_edit.setEnabled(True)
-        self.view.wizard.task_name_edit.clear()
+        # [해결] 세션 가동 도중에는 ID와 텍스트를 강제 초기화하지 않아, 파이프라인 정지 후 바로 다음 단계로 이어갈 수 있도록 조치!
+        self.view.wizard.task_name_edit.setEnabled(False)
         self.sync_task_list()
 
     def sync_task_list(self):
@@ -211,6 +265,8 @@ class DashboardPresenter:
                     else: state_txt = f"[{level}단계 완료]"
                 elif status == "FAILED":
                     state_txt = f"[❌ {level}단계 실패]"
+                elif status == "CANCELED":
+                    state_txt = f"[🛑 {level}단계 중단]"
                 else:
                     state_txt = f"[⏳ {level}단계 진행중]"
                     
@@ -284,6 +340,7 @@ class DashboardPresenter:
         elif action == "next_stage":
             self.current_resume_task_id = task_id
             self.active_log_task_id = task_id
+            self.pipeline_mode = "RESUME"
             self.view.wizard.task_name_edit.setText(name)
             self.view.wizard.task_name_edit.setEnabled(False)
             if level == 1:
@@ -295,20 +352,29 @@ class DashboardPresenter:
                     self.view.wizard.export_task_cb.setCurrentIndex(idx)
                 
         elif action == "retry_stage":
-            self.current_resume_task_id = None
             self.active_log_task_id = task_id
-            self.view.wizard.task_name_edit.setText(name)
-            self.view.wizard.task_name_edit.setEnabled(True)
             if level == 1:
+                # 1단계 재시도는 신규 태스크 생성과 거의 동일하므로 기존처럼 NEW로 동작
+                self.current_resume_task_id = None
+                self.pipeline_mode = "NEW"
+                self.view.wizard.task_name_edit.setText(name)
+                self.view.wizard.task_name_edit.setEnabled(True)
                 self.view.wizard.stack.setCurrentIndex(1)
-            elif level == 2:
-                self.view.wizard.stack.setCurrentIndex(2)
-            elif level == 3:
-                self.view.wizard.stack.setCurrentIndex(3)
+            else:
+                # 2단계/3단계 재시도는 기존 태스크의 해당 스테이지를 재가동하는 것이므로 RESUME(태스크ID 보존)으로 전환!
+                self.current_resume_task_id = task_id
+                self.pipeline_mode = "RESUME"
+                self.view.wizard.task_name_edit.setText(name)
+                self.view.wizard.task_name_edit.setEnabled(False)
+                if level == 2:
+                    self.view.wizard.stack.setCurrentIndex(2)
+                elif level == 3:
+                    self.view.wizard.stack.setCurrentIndex(3)
                 
         elif action == "resume_stage":
             self.current_resume_task_id = task_id
             self.active_log_task_id = task_id
+            self.pipeline_mode = "RESUME"
             self.view.wizard.task_name_edit.setText(name)
             self.view.wizard.task_name_edit.setEnabled(False)
             self.view.wizard.stack.setCurrentIndex(2)
@@ -366,6 +432,7 @@ class DashboardPresenter:
     def clear_resume_context(self):
         """이어하기 복구 등에 할당되었던 메모리 컨텍스트 영구 가비지 컬렉션"""
         self.current_resume_task_id = None
+        self.pipeline_mode = "NEW"
         self.view.wizard.task_name_edit.setEnabled(True)
         self.view.wizard.task_name_edit.clear()
         self.active_log_task_id = None

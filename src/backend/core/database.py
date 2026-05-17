@@ -131,6 +131,16 @@ class DatabaseManager:
                     create_dt TEXT NOT NULL,
                     FOREIGN KEY (task_id) REFERENCES tb_task (id) ON DELETE CASCADE
                 )
+            
+            # 7. tb_thread_log: 쓰레드 개수 조절 기록 테이블
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS tb_thread_log (
+                    log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_id TEXT,
+                    threads INTEGER NOT NULL,
+                    create_dt TEXT NOT NULL,
+                    FOREIGN KEY (task_id) REFERENCES tb_task (id) ON DELETE CASCADE
+                )
             ''')
             
             conn.commit()
@@ -176,6 +186,29 @@ class DatabaseManager:
 
     def get_task_details(self, task_id: str):
         return self.tasks.get_details(task_id)
+
+    def add_thread_log(self, task_id: str, threads: int) -> int:
+        if not task_id: return -1
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO tb_thread_log (task_id, threads, create_dt)
+                VALUES (?, ?, ?)
+            ''', (task_id, threads, now_str))
+            conn.commit()
+            return cursor.lastrowid
+            
+    def get_thread_logs(self, task_id: str) -> list:
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT threads, create_dt FROM tb_thread_log
+                WHERE task_id = ?
+                ORDER BY create_dt ASC
+            ''', (task_id,))
+            rows = cursor.fetchall()
+            return [{"threads": r["threads"], "time": r["create_dt"]} for r in rows]
 
 # 글로벌 단일 인스턴스 기동 및 외부 바인딩
 db_manager = DatabaseManager()
