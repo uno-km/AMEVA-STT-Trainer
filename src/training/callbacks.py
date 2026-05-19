@@ -64,3 +64,24 @@ class DashboardCallback(TrainerCallback):
     def on_epoch_end(self, args, state, control, **kwargs):
         # 매 에폭 종료 시 완료 메시지를 성공 로그로 출력
         logger.success(f"Epoch {state.epoch:.1f} 완료")
+
+    def on_save(self, args, state, control, **kwargs):
+        """체크포인트가 디스크에 저장될 때마다 호출되어 tb_checkpoint에 이력을 INSERT합니다."""
+        if not self.task_id:
+            return
+        try:
+            import os
+            from src.backend.core.database import db_manager
+            # HuggingFace Trainer는 output_dir/checkpoint-{global_step} 형태로 저장
+            ckpt_name = f"checkpoint-{state.global_step}"
+            ckpt_path = os.path.join(args.output_dir, ckpt_name)
+            if os.path.exists(ckpt_path):
+                db_manager.insert_checkpoint(
+                    task_id=self.task_id,
+                    ckpt_path=ckpt_path,
+                    ckpt_name=ckpt_name,
+                    step_level=2
+                )
+                logger.info(f"[Checkpoint DB] 체크포인트 이력 저장 완료: {ckpt_name}")
+        except Exception as e:
+            logger.error(f"[Checkpoint DB] 체크포인트 이력 저장 실패: {e}")

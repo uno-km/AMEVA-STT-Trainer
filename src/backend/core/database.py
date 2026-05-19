@@ -145,6 +145,20 @@ class DatabaseManager:
                 )
             ''')
             
+            # 8. tb_checkpoint: 학습 체크포인트 이력 누적 테이블 (INSERT 전용, UPDATE 금지)
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS tb_checkpoint (
+                    ckpt_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_id TEXT NOT NULL,
+                    create_dt TEXT NOT NULL,
+                    update_dt TEXT NOT NULL,
+                    ckpt_path TEXT NOT NULL,
+                    ckpt_name TEXT NOT NULL,
+                    step_level INTEGER NOT NULL DEFAULT 2,
+                    FOREIGN KEY (task_id) REFERENCES tb_task (id) ON DELETE CASCADE
+                )
+            ''')
+            
             conn.commit()
 
     # ==========================================================
@@ -211,6 +225,42 @@ class DatabaseManager:
             ''', (task_id,))
             rows = cursor.fetchall()
             return [{"threads": r["threads"], "time": r["create_dt"]} for r in rows]
+
+    def insert_checkpoint(self, task_id: str, ckpt_path: str, ckpt_name: str, step_level: int = 2) -> int:
+        """체크포인트 이력을 INSERT하여 누적 보존합니다. (UPDATE 하지 않음)"""
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO tb_checkpoint (task_id, create_dt, update_dt, ckpt_path, ckpt_name, step_level)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (task_id, now_str, now_str, ckpt_path, ckpt_name, step_level))
+            conn.commit()
+            return cursor.lastrowid
+
+    def get_latest_checkpoint(self, task_id: str, step_level: int = 2) -> dict:
+        """해당 태스크의 가장 최근(MAX ckpt_id) 체크포인트를 조회합니다."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT ckpt_id, task_id, create_dt, update_dt, ckpt_path, ckpt_name, step_level
+                FROM tb_checkpoint
+                WHERE task_id = ? AND step_level = ? AND ckpt_id = (
+                    SELECT MAX(ckpt_id) FROM tb_checkpoint WHERE task_id = ? AND step_level = ?
+                )
+            ''', (task_id, step_level, task_id, step_level))
+            row = cursor.fetchone()
+            if row:
+                return {
+                    "ckpt_id": row["ckpt_id"],
+                    "task_id": row["task_id"],
+                    "create_dt": row["create_dt"],
+                    "update_dt": row["update_dt"],
+                    "ckpt_path": row["ckpt_path"],
+                    "ckpt_name": row["ckpt_name"],
+                    "step_level": row["step_level"]
+                }
+            return None
 
 # 글로벌 단일 인스턴스 기동 및 외부 바인딩
 db_manager = DatabaseManager()

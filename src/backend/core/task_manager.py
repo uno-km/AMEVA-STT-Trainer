@@ -167,6 +167,10 @@ class TaskManager:
                                     
                     else:
                         checkpoint = self._find_latest_checkpoint(task_id) if level == 2 else None
+                        # tb_checkpoint에도 이력 INSERT
+                        if checkpoint:
+                            ckpt_name = os.path.basename(checkpoint)
+                            db_manager.insert_checkpoint(task_id, checkpoint, ckpt_name, step_level=level)
                         db_manager.update_task_status(task_id, level, "FAILED", f"Exit Code: {process.returncode}", checkpoint_path=checkpoint)
                         if checkpoint:
                             f.write(f"\n--- [AMEVA Engine] 치명적 오류. 최신 체크포인트 보존됨: {checkpoint} ---\n")
@@ -180,6 +184,9 @@ class TaskManager:
                     f.write(f"상세 정보: {traceback.format_exc()}\n")
                 from src.backend.core.database import db_manager
                 checkpoint = self._find_latest_checkpoint(task_id) if level == 2 else None
+                if checkpoint:
+                    ckpt_name = os.path.basename(checkpoint)
+                    db_manager.insert_checkpoint(task_id, checkpoint, ckpt_name, step_level=level)
                 db_manager.update_task_status(task_id, level, "FAILED", f"Error: {str(e)}", checkpoint_path=checkpoint)
             finally:
                 if task_id in self.active_processes:
@@ -245,12 +252,23 @@ class TaskManager:
             "--skip" 
         ]
         
-        # [핵심] 이어하기: DB에 체크포인트가 보존되어 있다면 인자로 넘겨서 이어서 학습!
-        task = db_manager.get_task_details(task_id)
-        if task and task.get('checkpoint_path'):
-            ckpt_path = task['checkpoint_path']
+        # [핵심] 이어하기: tb_checkpoint 테이블에서 해당 태스크의 최신 체크포인트를 조회하여 이어서 학습!
+        latest_ckpt = db_manager.get_latest_checkpoint(task_id, step_level=2)
+        if latest_ckpt:
+            ckpt_path = latest_ckpt['ckpt_path']
             if os.path.exists(ckpt_path):
                 cmd.extend(["--resume_from_checkpoint", ckpt_path])
+                logger.info(f"[Resume] tb_checkpoint에서 최신 체크포인트 감지: {latest_ckpt['ckpt_name']} → 이어서 학습 시작")
+            else:
+                logger.warning(f"[Resume] 체크포인트 경로가 존재하지 않음: {ckpt_path} → 처음부터 시작")
+        else:
+            # 폴백: 기존 tb_task.checkpoint_path 컬럼도 확인
+            task = db_manager.get_task_details(task_id)
+            if task and task.get('checkpoint_path'):
+                ckpt_path = task['checkpoint_path']
+                if os.path.exists(ckpt_path):
+                    cmd.extend(["--resume_from_checkpoint", ckpt_path])
+                    logger.info(f"[Resume Fallback] tb_task.checkpoint_path에서 체크포인트 감지: {ckpt_path}")
                 
         self._run_script_async(cmd, task_id, level=2)
 
@@ -283,11 +301,16 @@ class TaskManager:
             lora_dir = os.path.join(self.base_dir, "outputs", task_id, "lora_adapter")
             
             latest_ckpt = None
+            latest_ckpt_name = None
             if os.path.exists(lora_dir):
                 ckpts = [d for d in os.listdir(lora_dir) if d.startswith("checkpoint-")]
                 if ckpts:
-                    latest = sorted(ckpts, key=lambda x: int(x.split("-")[-1]))[-1]
-                    latest_ckpt = os.path.join(lora_dir, latest)
+                    latest_ckpt_name = sorted(ckpts, key=lambda x: int(x.split("-")[-1]))[-1]
+                    latest_ckpt = os.path.join(lora_dir, latest_ckpt_name)
+            
+            # tb_checkpoint에 이력 INSERT (누적 보존)
+            if latest_ckpt and latest_ckpt_name:
+                db_manager.insert_checkpoint(task_id, latest_ckpt, latest_ckpt_name, step_level=2)
             
             db_manager.update_task_status(task_id, task.get('level', 1), "FAILED", 
                                        log_msg="사용자에 의해 강제 종료되었습니다.",
