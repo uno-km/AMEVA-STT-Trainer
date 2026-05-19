@@ -7,7 +7,7 @@ class LogRepository(BaseRepository):
     """
     def add(self, level: str, message: str, task_id: str = None) -> int:
         """훈련 엔진 로그 한 라인을 데이터베이스에 타임스탬프와 함께 삽입합니다."""
-        create_dt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        create_dt = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('''

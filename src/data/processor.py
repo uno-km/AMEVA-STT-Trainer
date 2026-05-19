@@ -234,3 +234,51 @@ def process_video(
     if cur_text and cur_start_ms != -1:
         _flush(cur_start_ms, cur_end_ms, cur_text, cur_text_clean)
     return entries
+
+
+def estimate_video_chunks(vtt_path: str) -> int:
+    """오디오 파일을 실제로 분할/저장하지 않고 VTT 자막 경로만 파싱하여 생성될 예상 청크 개수를 시뮬레이션 계산합니다."""
+    try:
+        captions = parse_vtt(vtt_path)
+        if not captions:
+            return 0
+        
+        max_dur = min(CFG["max_chunk_duration_ms"], 30000)
+        chunk_count = 0
+        cur_start_ms, cur_text, cur_end_ms = -1, "", 0
+        
+        for cap in captions:
+            start_ms, end_ms, text = cap["start_ms"], cap["end_ms"], cap["text"]
+            if end_ms <= start_ms:
+                continue
+            if cur_start_ms != -1 and start_ms < cur_end_ms:
+                start_ms = cur_end_ms
+                if end_ms <= start_ms:
+                    continue
+            if cur_start_ms == -1:
+                cur_start_ms, cur_text, cur_end_ms = start_ms, text, end_ms
+                continue
+            
+            duration = end_ms - cur_start_ms
+            caption_gap_ms = cap["start_ms"] - cur_end_ms
+            is_silence_gap = caption_gap_ms > 1500
+            is_sentence_end = bool(re.search(r"(다|요|죠|니|까)[\.\?\!\s]*[\'\"\]\)]*$", cur_text.strip())) or cur_text.strip().endswith((".", "?", "!"))
+            
+            should_flush = (
+                duration > max_dur or 
+                (duration > 10000 and is_silence_gap) or 
+                (duration > 15000 and is_sentence_end)
+            )
+            if should_flush:
+                chunk_count += 1
+                cur_start_ms, cur_text, cur_end_ms = start_ms, text, end_ms
+            else:
+                cur_text += " " + text
+                cur_end_ms = end_ms
+                
+        if cur_text and cur_start_ms != -1:
+            chunk_count += 1
+            
+        return chunk_count
+    except Exception:
+        return 0

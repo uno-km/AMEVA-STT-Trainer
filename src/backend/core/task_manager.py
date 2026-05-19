@@ -103,6 +103,7 @@ class TaskManager:
         
         env = os.environ.copy()
         env["PYTHONIOENCODING"] = "utf-8"
+        env["PYTHONUNBUFFERED"] = "1"
         env["CURRENT_TASK_ID"] = task_id
         # 태스크 관련 메타데이터나 특정 정보를 환경변수로 추가 전달 가능
 

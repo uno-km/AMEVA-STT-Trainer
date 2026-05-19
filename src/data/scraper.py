@@ -220,6 +220,14 @@ def scrape_channel(url: str = None, count: int = None) -> List[VideoInfo]:
         # 다운로드 실행 후 결과 경로 수신 (실패 항목은 None)
         audio_path, vtt_path = download_video_data(video_id, video_dir) or (None, None)
         results.append((video_id, date_str, audio_path, vtt_path))
+        
+        # 다운로드 결과 상세 실시간 로그 출력
+        if audio_path and os.path.exists(audio_path):
+            size_mb = os.path.getsize(audio_path) / (1024 * 1024)
+            folder_rel = os.path.relpath(video_dir, os.getcwd())
+            logger.info(f"▶ [수집 완료] {idx+1}/{len(pairs)} - 제목: {title} | ID: {video_id} | 용량: {size_mb:.2f}MB | 폴더: {folder_rel}")
+        else:
+            logger.warning(f"▶ [수집 실패] {idx+1}/{len(pairs)} - 제목: {title} | ID: {video_id}")
 
     logger.info(f"수집 완료: 총 {len(results)}개 영상 처리")
     return results

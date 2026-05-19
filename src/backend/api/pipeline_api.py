@@ -82,9 +82,22 @@ def get_past_records():
 def get_logs(task_id: str = None):
     if not task_id:
         return {"logs": "선택된 태스크가 없습니다."}
-    if hasattr(task_manager, 'get_task_logs'):
-        return {"logs": task_manager.get_task_logs(task_id)}
-    return {"logs": "로그 시스템 오류"}
+    try:
+        from src.backend.core.database import db_manager
+        db_logs = db_manager.get_logs(task_id, limit=1000)
+        formatted_logs = []
+        for log in db_logs:
+            dt_str = log.get("create_dt", "")
+            time_part = dt_str.split(" ")[-1] if " " in dt_str else dt_str
+            formatted_logs.append({
+                "id": log.get("log_id"),
+                "timestamp": time_part,
+                "level": log.get("level", "INFO"),
+                "message": log.get("message", "")
+            })
+        return {"logs": formatted_logs}
+    except Exception as e:
+        return {"logs": f"로그 로드 실패: {str(e)}"}
 
 @router.get("/api/v1/tasks/list")
 def list_tasks():

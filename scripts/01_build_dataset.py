@@ -28,7 +28,7 @@ import argparse
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from src.data.scraper   import scrape_channel
-from src.data.processor import process_video
+from src.data.processor import process_video, estimate_video_chunks
 from src.data.validator import validate_dataset
 from src.core.config    import METADATA_PATH, DATASET_DIR
 from src.utils          import logger
@@ -221,6 +221,10 @@ def main():
         logger.set_status("데이터 수집 중", "채널 목록 및 오디오 수집")
         video_list = []
         is_local = bool(args.folder) or (args.source_type == "local")
+        if not is_local:
+            logger.info(f"▶ [데이터 수집 시작] 유튜브 채널 URL '{args.url}' 에서 최신 {args.count}개 영상을 분석 및 수집하기 시작합니다.")
+        else:
+            logger.info(f"▶ [데이터 수집 시작] 로컬 폴더 '{args.folder}' 에서 파일 스캔 및 매칭을 시작합니다.")
 
         if not is_local:
             video_list = scrape_channel(url=args.url, count=args.count)
@@ -280,12 +284,34 @@ def main():
         PIPELINE_COUNTERS["post_clamp_skip"] = 0
         PIPELINE_COUNTERS["too_short_chunk_drop"] = 0
 
+        # 청킹 개수 고속 시뮬레이션 예측 계산
+        logger.info("▶ [전처리 준비] 자막 파일 분석을 통한 예상 총 청크 개수 계산 중...")
+        total_expected_chunks = 0
+        for vid, date_str, a_path, v_path in video_list:
+            if v_path and os.path.exists(v_path):
+                total_expected_chunks += estimate_video_chunks(v_path)
+        logger.info(f"▶ [전처리 준비 완료] 전체 {len(video_list)}개 자막 스트림 분석 완료. 예상 최종 청크 수: {total_expected_chunks}개")
+
+        completed_chunks = 0
+        last_logged_pct = -10
+
         for i, (vid, date_str, a_path, v_path) in enumerate(video_list):
             if not a_path or not v_path: continue
             logger.set_status("오디오 전처리 중", f"[{i+1}/{len(video_list)}] {vid} 분할 중")
             # [수정] target_dir을 넘겨서 해당 폴더에 청크 저장
             entries = process_video(vid, date_str, a_path, v_path, mode=args.mode, output_dir=target_dir)
             all_entries.extend(entries)
+            
+            # 실시간 진행률 및 마일스톤 로그 출력
+            completed_chunks += len(entries)
+            pct = (completed_chunks / total_expected_chunks) * 100 if total_expected_chunks > 0 else 0
+            logger.info(f"▶ [청킹 진행] [{i+1}/{len(video_list)}] 영상 '{vid}' 분할 완료 (+{len(entries)}개 청크) -> 누적 {completed_chunks}/{total_expected_chunks}개 ({pct:.1f}%)")
+            
+            # 10% 마일스톤 돌파 감지 및 알림
+            current_10_block = int(pct // 10) * 10
+            if current_10_block > last_logged_pct:
+                logger.info(f"▶ [청킹 마일스톤] 전체 데이터셋 전처리 {current_10_block}% 완료! (현재 누적 {completed_chunks}개 청크 가공 완료)")
+                last_logged_pct = current_10_block
         # 3. metadata.csv 저장 (격리된 폴더에 저장)
         if all_entries:
             df = pd.DataFrame(all_entries)
