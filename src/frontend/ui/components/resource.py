@@ -93,16 +93,32 @@ class ResourcePanel(QFrame):
         self.aff_slider.setValue(self.allocated_cores)
         self.aff_slider.setFixedHeight(12)
         
-        # 슬라이더 값 변경 시 실시간 코어 할당 바인딩
-        self.aff_slider.valueChanged.connect(self.on_slider_changed)
+        # 디바운스 타이머 설정 (슬라이더 조작 해제 후 1초 뒤 API 반영)
+        self.debounce_timer = QTimer(self)
+        self.debounce_timer.setSingleShot(True)
+        self.debounce_timer.timeout.connect(self.apply_cpu_affinity)
+        self.ignore_sync_counter = 0
+        
+        # 슬라이더 값 변경 시 라벨만 실시간 변경 (API 호출 차단)
+        self.aff_slider.valueChanged.connect(self.on_slider_value_changed)
+        # 슬라이더 마우스 클릭을 뗐을 때 1초 대기 타이머 가동
+        self.aff_slider.sliderReleased.connect(self.on_slider_released)
         
         aff_layout.addWidget(self.aff_lbl)
         aff_layout.addWidget(self.aff_slider)
         layout.addWidget(affinity_widget, 1) # 비율 1
         
-    def on_slider_changed(self, val):
-        """슬라이더 조정 즉시 실시간으로 코어 배분 API 전송"""
+    def on_slider_value_changed(self, val):
+        """슬라이더 드래그 중 라벨 텍스트만 즉시 변경 (API 호출 방지)"""
         self.aff_lbl.setText(f"Cores: {val}/{self.total_cores}")
+        
+    def on_slider_released(self):
+        """슬라이더를 놓았을 때 1초 후에 시스템 반영하도록 디바운스 타이머 시작"""
+        self.debounce_timer.start(1000)
+        
+    def apply_cpu_affinity(self):
+        """1초간 대기 후 슬라이더의 최종 선택 값을 백엔드 API로 전송"""
+        val = self.aff_slider.value()
         
         # 메인 윈도우 및 프리젠터에서 현재 활성화된 태스크 ID 역추적
         task_id = None
@@ -118,6 +134,9 @@ class ResourcePanel(QFrame):
             if task_id:
                 payload["task_id"] = task_id
             self.ctx.api.post("/api/v1/hardware/affinity", payload)
+            
+            # API 전송 후 2회 폴링 주기 동안 백엔드 동기화로 인한 핸들 되감기 차단
+            self.ignore_sync_counter = 2
         except Exception as e:
             print(f"[Affinity Bind Error] {e}")
             
@@ -127,12 +146,17 @@ class ResourcePanel(QFrame):
         self.cpu_lbl.setText(f"CPU: {cpu:.1f}%")
         self.cpu_bar.setValue(int(cpu))
         
-        # 슬라이더를 직접 사용자가 조절하고 있지 않을 때만, 실시간 할당값 동기화
-        if not self.aff_slider.isSliderDown():
-            try:
-                allocated = res.get("allocated_cores")
-                if allocated is not None:
-                    self.aff_slider.setValue(allocated)
-                    self.aff_lbl.setText(f"Cores: {allocated}/{self.total_cores}")
-            except Exception:
-                pass
+        # 슬라이더 조절 중이거나 디바운싱 대기 중, 혹은 방금 전송된 직후가 아닐 때만 동기화
+        if not self.aff_slider.isSliderDown() and not self.debounce_timer.isActive():
+            if getattr(self, 'ignore_sync_counter', 0) > 0:
+                self.ignore_sync_counter -= 1
+            else:
+                try:
+                    allocated = res.get("allocated_cores")
+                    if allocated is not None:
+                        self.aff_slider.blockSignals(True)
+                        self.aff_slider.setValue(allocated)
+                        self.aff_slider.blockSignals(False)
+                        self.aff_lbl.setText(f"Cores: {allocated}/{self.total_cores}")
+                except Exception:
+                    pass

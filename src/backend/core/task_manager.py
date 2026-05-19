@@ -145,10 +145,14 @@ class TaskManager:
                         # [로그발생 -> 로그출력 -> 저장] 철벽 실시간 파이프라인 주입!
                         stripped = line.strip()
                         if stripped:
-                            # 내부 로거(_write_to_db)가 이미 직접 DB에 기록한 중복 로그(INFO, WARNING, ERROR, SUCCESS 시작)는 DB 삽입 제외
-                            is_dup = any(stripped.startswith(prefix) for prefix in ["INFO ", "WARNING ", "ERROR ", "SUCCESS "])
+                            # ANSI escape sequences 제거 (가장 완벽한 필터링 보장)
+                            import re
+                            clean_line = re.sub(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])', '', stripped)
+                            # 내부 로거(_write_to_db)가 이미 직접 DB에 기록한 중복 로그는 DB 삽입 제외
+                            # logger.py가 출력하는 모든 표준 접두사 목록 필터링
+                            is_dup = any(clean_line.startswith(prefix) for prefix in ["INFO ", "ERR ", "OK ", "WARNING ", "ERROR ", "SUCCESS "])
                             if not is_dup:
-                                db_manager.add_log("INFO", stripped, task_id)
+                                db_manager.add_log("INFO", clean_line, task_id)
                             
                     process.wait()
                     

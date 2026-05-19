@@ -19,6 +19,9 @@ class DashboardPresenter:
         
         # 활성 상태 변수 격리 보관
         self.active_log_task_id = None
+        self.last_active_log_task_id = None
+        self.plotted_metrics_count = 0
+        self.report_shown_for_active_task = False
         self.current_resume_task_id = None
         self.pipeline_mode = "NEW" # "NEW" or "RESUME"
         self.last_explorer_task_id = -1 # 파일 탐색기 필터링 갱신용 센티널 변수
@@ -42,18 +45,30 @@ class DashboardPresenter:
                 
             # 3. 모델 성능 지표 매핑 및 실시간 차트 업데이트
             if self.active_log_task_id:
+                # 활성 태스크 ID가 변경되었으면 차트 초기화 및 카운트 리셋
+                if self.last_active_log_task_id != self.active_log_task_id:
+                    self.last_active_log_task_id = self.active_log_task_id
+                    self.plotted_metrics_count = 0
+                    self.view.chart_loss.chart.prefill_data(0.0)
+                    self.view.chart_speed.chart.prefill_data(0.0)
+                    self.view.chart_metric.chart.prefill_data(0.0)
+                    
                 metrics_res = self.ctx.api.get(f"/api/v1/tasks/metrics?task_id={self.active_log_task_id}")
                 if metrics_res and "metrics" in metrics_res:
                     metrics = metrics_res["metrics"]
-                    current_points = len(self.view.chart_loss.chart.data)
-                    for m in metrics[current_points:]:
+                    current_count = self.plotted_metrics_count
+                    for m in metrics[current_count:]:
                         loss_val = m.get('loss', 0)
                         speed_val = m.get('speed', 0)
+                        dt_str = m.get('create_dt', '')
+                        time_part = dt_str.split(" ")[-1] if " " in dt_str else dt_str
                         
-                        self.view.chart_loss.add_data(loss_val)
-                        self.view.chart_speed.add_data(speed_val)
+                        self.view.chart_loss.add_data({"value": float(loss_val), "time": time_part})
+                        self.view.chart_speed.add_data({"value": float(speed_val), "time": time_part})
                         # Loss에 역비례하는 직관적 정확도 실시간 계산
-                        self.view.chart_metric.add_data(max(0.0, 1.0 - (loss_val * 0.1)))
+                        acc_val = max(0.0, 1.0 - (loss_val * 0.1))
+                        self.view.chart_metric.add_data({"value": float(acc_val), "time": time_part})
+                        self.plotted_metrics_count += 1
 
             # 4. 실시간 학습 로그 콘솔 Push
             if self.active_log_task_id:
@@ -123,6 +138,17 @@ class DashboardPresenter:
                             f"color: {self.ctx.get_color('success')}; background-color: {self.ctx.get_color('bg_panel')}; padding: 5px 12px; border-radius: 6px;"
                         )
                         self.view.toggle_ui_lock(False)
+                        
+                        # 자동 완료 리포트 표출 (1회성 차단 센티널 작동)
+                        if not self.report_shown_for_active_task:
+                            self.report_shown_for_active_task = True
+                            if level == 1:
+                                self.show_validation_report(self.active_log_task_id, name)
+                            elif level == 3:
+                                data = self.ctx.api.get(f"/api/v1/tasks/report?task_id={self.active_log_task_id}")
+                                if data:
+                                    self.view.report = ReportWindow(self.ctx, data)
+                                    self.view.report.show()
                     else:
                         display_status = "중단됨" if status == "CANCELED" else "실패"
                         self.view.stage_label.setText(f"Stage: {display_status}")
@@ -241,6 +267,7 @@ class DashboardPresenter:
 
         # 상태 락온 및 실시간 감시 화면으로 인입
         self.active_log_task_id = task_id
+        self.report_shown_for_active_task = False
         self.view.wizard.stack.setCurrentIndex(6) 
         self.view.wizard.update_monitor(name, step, "RUNNING")
         
@@ -316,18 +343,7 @@ class DashboardPresenter:
         
         if action == "view_report":
             if level == 1:
-                # 1단계 무결성 검수 HTML/MD 열기
-                project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-                val_report_path = os.path.join(
-                    getattr(self.ctx, 'base_dir', None) or project_root, 
-                    "dataset", f"{name}_{task_id[:8]}", "validation_report.md"
-                )
-                if os.path.exists(val_report_path):
-                    viewer = CSVViewer(self.ctx, val_report_path)
-                    self.view.tabs.addTab(viewer, f"📊 {name} 검수 보고서")
-                    self.view.tabs.setCurrentWidget(viewer)
-                else:
-                    QMessageBox.warning(self.view, "오류", "데이터셋 검수 리포트(validation_report.md)를 찾을 수 없습니다.")
+                self.show_validation_report(task_id, name)
             elif level == 3:
                 data = self.ctx.api.get(f"/api/v1/tasks/report?task_id={task_id}")
                 if data:
@@ -445,3 +461,23 @@ class DashboardPresenter:
 
     def update_cpu_affinity(self, val):
         self.ctx.api.post("/api/v1/hardware/affinity", {"cores": val})
+
+    def show_validation_report(self, task_id, name):
+        """1단계 무결성 검수 리포트(validation_report.md)를 탭 뷰어로 로드합니다."""
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+        val_report_path = os.path.join(
+            getattr(self.ctx, 'base_dir', None) or project_root, 
+            "dataset", f"{name}_{task_id[:8]}", "validation_report.md"
+        )
+        if os.path.exists(val_report_path):
+            # 중복 탭 생성을 감지하여 기존 탭 포커싱
+            tab_title = f"📊 {name} 검수 보고서"
+            for i in range(self.view.tabs.count()):
+                if self.view.tabs.tabText(i) == tab_title:
+                    self.view.tabs.setCurrentIndex(i)
+                    return
+            viewer = CSVViewer(self.ctx, val_report_path)
+            self.view.tabs.addTab(viewer, tab_title)
+            self.view.tabs.setCurrentWidget(viewer)
+        else:
+            QMessageBox.warning(self.view, "오류", f"데이터셋 검수 리포트(validation_report.md)를 찾을 수 없습니다.\n경로: {val_report_path}")

@@ -168,11 +168,16 @@ class WizardPanel(QWidget):
         [인터랙티브 상태 제어기] 관제 단계 카드 클릭 시, 선결 공정 조건 충족 여부를 판단하여 
         즉각 최적의 설정 페이지로 점프 스위칭시키는 하이엔드 인터랙션 가드.
         """
-        if step_idx == 0:
-            return
-            
         task_name = self.mon_task_name.text().replace("🏃 ", "").strip()
         if not task_name or task_name == "실시간 모니터링":
+            return
+
+        if step_idx == 0:
+            s1_text = self.mon_steps[0].text()
+            if "완료" in s1_text:
+                task_id = self.w.presenter.active_log_task_id
+                if task_id:
+                    self.w.presenter.show_validation_report(task_id, task_name)
             return
             
         # 2단계(모델 학습) 클릭 시

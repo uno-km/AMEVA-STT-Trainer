@@ -55,6 +55,17 @@ class HardwareManager:
             # 0번 코어부터 target_cores 개수만큼 할당 (0, 1, 2... target_cores-1)
             affinity_list = list(range(target_cores))
             self.process.cpu_affinity(affinity_list)
+            
+            # [추가] 가동 중인 자식 프로세스(학습/전처리 등 서브프로세스)에게도 친화도 전파
+            try:
+                for child in self.process.children(recursive=True):
+                    try:
+                        child.cpu_affinity(affinity_list)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+                
             self.allocated_cores = target_cores
             return {"success": True, "allocated": target_cores, "affinity": affinity_list}
         except Exception as e:
