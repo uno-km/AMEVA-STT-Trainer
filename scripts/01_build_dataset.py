@@ -10,6 +10,14 @@ scripts/01_build_dataset.py
 """
 import sys
 import os
+
+# --- FFmpeg 경로 자동 등록 (pydub 경고 방지) ---
+FFMPEG_C_PATH = r"C:\ffmpeg\bin\ffmpeg.exe"
+FFMPEG_BIN_DIR = os.path.dirname(FFMPEG_C_PATH)
+if os.path.exists(FFMPEG_C_PATH):
+    if FFMPEG_BIN_DIR not in os.environ.get("PATH", ""):
+        os.environ["PATH"] = FFMPEG_BIN_DIR + os.pathsep + os.environ.get("PATH", "")
+
 import pandas as pd
 from collections import Counter
 from rich.table import Table

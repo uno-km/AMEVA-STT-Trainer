@@ -47,7 +47,7 @@ class Step1Page(QWidget):
         
         y_layout.addWidget(self.w._create_styled_label("최대 수집 영상 개수"))
         self.task_count_spin = self.w._create_styled_input(QSpinBox())
-        self.task_count_spin.setRange(1, 100); self.task_count_spin.setValue(5)
+        self.task_count_spin.setRange(1, 300); self.task_count_spin.setValue(5)
         y_layout.addWidget(self.task_count_spin)
         form.addWidget(self.youtube_widget)
 
