@@ -92,6 +92,7 @@ def get_video_info_list(channel_url: str, count: int) -> List[Tuple[str, str, st
         if vid:
             pairs.append((vid, date_str, title))
 
+    pairs = pairs[:count]
     logger.info(f"영상 {len(pairs)}개 정보 확인 완료")
     return pairs
 
@@ -191,6 +192,17 @@ def download_video_data(video_id: str, video_dir: str) -> Tuple[Optional[str], O
     return audio_path, vtt_path
 
 
+def sanitize_channel_url(url: str) -> str:
+    """유튜브 채널 URL일 경우 쇼츠/라이브를 제외한 일반 업로드 동영상만 가져오도록 /videos 접미사를 자동 보정합니다."""
+    if not url:
+        return url
+    url = url.strip().rstrip("/")
+    if ("youtube.com" in url or "youtu.be" in url) and any(x in url for x in ["/@", "/c/", "/channel/", "/user/"]):
+        if not any(url.endswith(sub) for sub in ["/videos", "/shorts", "/streams", "/live"]):
+            url += "/videos"
+    return url
+
+
 # ---------------------------------------------------------------------------- #
 #  전체 채널 수집 진입점                                                          #
 # ---------------------------------------------------------------------------- #
@@ -202,6 +214,7 @@ def scrape_channel(url: str = None, count: int = None) -> List[VideoInfo]:
     """
     # 전역 설정 혹은 인자로 받은 채널 URL 과 최대 수집 영상 수 로드
     channel_url = url if url else CFG["channel_url"]
+    channel_url = sanitize_channel_url(channel_url)
     max_videos  = count if count else CFG["max_videos"]
 
     # 영상 ID, 날짜, 제목 목록 수집

@@ -3,6 +3,8 @@ src/utils/logger.py
 Rich 라이브러리를 활용한 프리미엄 고정형 대시보드 로거.
 """
 import os
+import sys
+from contextlib import nullcontext
 import psutil
 from datetime import datetime
 from rich.console import Console
@@ -87,8 +89,9 @@ def _write_to_db(level: str, message: str):
     """파일 대신 SQLite DB에 로그를 영구 기록합니다."""
     try:
         from src.backend.core.database import db_manager
-        # 현재 실행 중인 태스크가 있다면 해당 ID로 기록 (글로벌 상태에서 가져올 수도 있음)
-        db_manager.add_log(level, message)
+        # 환경변수에서 현재 실행 중인 태스크 ID가 있으면 획득하여 기록
+        task_id = os.environ.get("CURRENT_TASK_ID")
+        db_manager.add_log(level, message, task_id)
     except Exception:
         # DB 오류 시 fallback으로 콘솔에만 출력
         pass
@@ -122,6 +125,11 @@ def set_status(main_task: str = None, sub_task: str = None):
 
 def dashboard_context():
     state.start_time = datetime.now()
+    # 터미널(TTY)이 아니거나 백그라운드 파이프 실행인 경우 Live 대시보드를 비활성화하여 교착상태(deadlock)를 예방합니다.
+    if not sys.stdout.isatty() or os.environ.get("CURRENT_TASK_ID"):
+        state.is_dashboard_active = False
+        return nullcontext()
+    
     state.is_dashboard_active = True
     return Live(create_status_layout(), refresh_per_second=4, get_renderable=create_status_layout, transient=True)
 

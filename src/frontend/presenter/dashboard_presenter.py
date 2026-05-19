@@ -80,6 +80,8 @@ class DashboardPresenter:
                             active_name = row[0]
                         conn.close()
                     except Exception as e:
+                        import traceback
+                        traceback.print_exc()
                         print(f"[Presenter Explorer Name Resolve Error] {e}")
                 
                 files = self.ctx.api.get("/api/v1/files/explorer")

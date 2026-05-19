@@ -145,7 +145,10 @@ class TaskManager:
                         # [로그발생 -> 로그출력 -> 저장] 철벽 실시간 파이프라인 주입!
                         stripped = line.strip()
                         if stripped:
-                            db_manager.add_log("INFO", stripped, task_id)
+                            # 내부 로거(_write_to_db)가 이미 직접 DB에 기록한 중복 로그(INFO, WARNING, ERROR, SUCCESS 시작)는 DB 삽입 제외
+                            is_dup = any(stripped.startswith(prefix) for prefix in ["INFO ", "WARNING ", "ERROR ", "SUCCESS "])
+                            if not is_dup:
+                                db_manager.add_log("INFO", stripped, task_id)
                             
                     process.wait()
                     

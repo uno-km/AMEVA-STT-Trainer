@@ -1,5 +1,6 @@
 from src.frontend.ui.core.qt import *
 from PyQt6.QtWidgets import QMessageBox
+import sqlite3
 
 # 새로 분할 찢기한 각 독립 모듈 페이지들 임포트
 from src.frontend.ui.components.pages import (
@@ -124,6 +125,20 @@ class WizardPanel(QWidget):
 
     def update_monitor(self, task_name, level, status):
         self.mon_task_name.setText(f"🏃 {task_name}")
+        
+        # 상단 현재 상태 레이블 동적 동기화 추가
+        if status == "RUNNING":
+            status_text = f"현재 상태: {level}단계 진행 중 ⏳"
+        elif status == "SUCCESS":
+            status_text = "현재 상태: 모든 공정 완료 ✅"
+        elif status == "CANCELED":
+            status_text = "현재 상태: 작업 중단됨 🛑"
+        elif status == "FAILED":
+            status_text = "현재 상태: 작업 실패 ❌"
+        else:
+            status_text = f"현재 상태: {status}"
+        self.mon_status.setText(status_text)
+
         for i, lbl in enumerate(self.mon_steps):
             step_lv = i + 1
             if step_lv < level:
