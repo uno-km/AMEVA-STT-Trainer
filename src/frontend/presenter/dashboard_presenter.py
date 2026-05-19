@@ -364,8 +364,10 @@ class DashboardPresenter:
             self.view.wizard.task_name_edit.setText(name)
             self.view.wizard.task_name_edit.setEnabled(False)
             if level == 1:
+                self.load_parameters_to_ui(task_id, 2)
                 self.view.wizard.stack.setCurrentIndex(2)
             elif level == 2:
+                self.load_parameters_to_ui(task_id, 3)
                 self.view.wizard.stack.setCurrentIndex(3)
                 idx = self.view.wizard.export_task_cb.findData(task_id)
                 if idx >= 0: 
@@ -387,8 +389,10 @@ class DashboardPresenter:
                 self.view.wizard.task_name_edit.setText(name)
                 self.view.wizard.task_name_edit.setEnabled(False)
                 if level == 2:
+                    self.load_parameters_to_ui(task_id, 2)
                     self.view.wizard.stack.setCurrentIndex(2)
                 elif level == 3:
+                    self.load_parameters_to_ui(task_id, 3)
                     self.view.wizard.stack.setCurrentIndex(3)
                 
         elif action == "resume_stage":
@@ -397,6 +401,7 @@ class DashboardPresenter:
             self.pipeline_mode = "RESUME"
             self.view.wizard.task_name_edit.setText(name)
             self.view.wizard.task_name_edit.setEnabled(False)
+            self.load_parameters_to_ui(task_id, 2)
             self.view.wizard.stack.setCurrentIndex(2)
 
     def run_export_pipeline(self):
@@ -481,3 +486,61 @@ class DashboardPresenter:
             self.view.tabs.setCurrentWidget(viewer)
         else:
             QMessageBox.warning(self.view, "오류", f"데이터셋 검수 리포트(validation_report.md)를 찾을 수 없습니다.\n경로: {val_report_path}")
+
+    def load_parameters_to_ui(self, task_id, step_seq):
+        """데이터베이스에서 특정 태스크의 단계별 파라미터를 로드하여 UI 위젯에 동기화"""
+        try:
+            import json
+            import sqlite3
+            project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+            db_path = os.path.join(getattr(self.ctx, 'base_dir', None) or project_root, "db/stt_trainer.db")
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT parameters FROM tb_task_dtl WHERE task_id = ? AND step_seq = ?",
+                (task_id, step_seq)
+            )
+            row = cursor.fetchone()
+            conn.close()
+            
+            if row and row[0]:
+                params = json.loads(row[0])
+                
+                if step_seq == 2:
+                    model_id = params.get("model_id")
+                    max_steps = params.get("max_steps")
+                    learning_rate = params.get("learning_rate")
+                    batch_size = params.get("batch_size")
+                    grad_acc = params.get("gradient_accumulation")
+                    
+                    self.view.wizard.model_cb.blockSignals(True)
+                    idx = self.view.wizard.model_cb.findText(str(model_id))
+                    if idx >= 0:
+                        self.view.wizard.model_cb.setCurrentIndex(idx)
+                    self.view.wizard.model_cb.blockSignals(False)
+                    
+                    from src.core.config import MODEL_DEFAULTS
+                    defaults = MODEL_DEFAULTS.get(model_id, MODEL_DEFAULTS.get("openai/whisper-tiny", {}))
+                    if defaults:
+                        self.view.wizard.model_desc_lbl.setText(defaults.get("description", ""))
+                        
+                    if max_steps is not None:
+                        self.view.wizard.max_steps_spin.setValue(int(max_steps))
+                    if learning_rate is not None:
+                        self.view.wizard.lr_edit.setText(str(learning_rate))
+                    if batch_size is not None:
+                        self.view.wizard.batch_spin.setValue(int(batch_size))
+                    if grad_acc is not None:
+                        self.view.wizard.grad_acc_spin.setValue(int(grad_acc))
+                        
+                elif step_seq == 3:
+                    auto_export = params.get("auto_export", False)
+                    method = params.get("method")
+                    
+                    self.view.wizard.auto_export_cb.setChecked(bool(auto_export))
+                    if method:
+                        idx = self.view.wizard.auto_method_cb.findText(str(method))
+                        if idx >= 0:
+                            self.view.wizard.auto_method_cb.setCurrentIndex(idx)
+        except Exception as e:
+            print(f"[Presenter Error loading step {step_seq} parameters] {e}")

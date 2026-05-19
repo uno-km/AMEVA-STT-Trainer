@@ -93,27 +93,22 @@ class ResourcePanel(QFrame):
         self.aff_slider.setValue(self.allocated_cores)
         self.aff_slider.setFixedHeight(12)
         
-        # 디바운스 타이머 설정 (슬라이더 조작 해제 후 1초 뒤 API 반영)
+        # 디바운스 타이머 설정 (슬라이더 조작 후 1초 뒤 API 반영)
         self.debounce_timer = QTimer(self)
         self.debounce_timer.setSingleShot(True)
         self.debounce_timer.timeout.connect(self.apply_cpu_affinity)
         self.ignore_sync_counter = 0
         
-        # 슬라이더 값 변경 시 라벨만 실시간 변경 (API 호출 차단)
+        # 슬라이더 값 변경 시 라벨 변경 및 디바운싱 타이머 기동
         self.aff_slider.valueChanged.connect(self.on_slider_value_changed)
-        # 슬라이더 마우스 클릭을 뗐을 때 1초 대기 타이머 가동
-        self.aff_slider.sliderReleased.connect(self.on_slider_released)
         
         aff_layout.addWidget(self.aff_lbl)
         aff_layout.addWidget(self.aff_slider)
         layout.addWidget(affinity_widget, 1) # 비율 1
         
     def on_slider_value_changed(self, val):
-        """슬라이더 드래그 중 라벨 텍스트만 즉시 변경 (API 호출 방지)"""
+        """슬라이더 값 변경 시 라벨 텍스트 실시간 반영 및 1초 디바운스 타이머 가동"""
         self.aff_lbl.setText(f"Cores: {val}/{self.total_cores}")
-        
-    def on_slider_released(self):
-        """슬라이더를 놓았을 때 1초 후에 시스템 반영하도록 디바운스 타이머 시작"""
         self.debounce_timer.start(1000)
         
     def apply_cpu_affinity(self):

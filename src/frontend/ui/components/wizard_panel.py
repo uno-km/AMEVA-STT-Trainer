@@ -224,7 +224,7 @@ class WizardPanel(QWidget):
                 db_path = os.path.join(base_dir, "db", "stt_trainer.db")
                 conn = sqlite3.connect(db_path)
                 cursor = conn.cursor()
-                cursor.execute("SELECT id FROM tb_task WHERE tsk_nm = ? ORDER BY created_at DESC LIMIT 1", (task_name,))
+                cursor.execute("SELECT id FROM tb_task WHERE tsk_nm = ? ORDER BY create_dt DESC LIMIT 1", (task_name,))
                 row = cursor.fetchone()
                 if row:
                     task_id = row[0]

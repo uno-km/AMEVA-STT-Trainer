@@ -123,7 +123,7 @@ class LogViewer(QWidget):
                 conn = sqlite3.connect(self.db_path)
                 cursor = conn.cursor()
                 cursor.execute(
-                    "SELECT log_level, message, created_at FROM tb_log WHERE task_id = ? ORDER BY id ASC",
+                    "SELECT level, message, create_dt FROM tb_log WHERE task_id = ? ORDER BY log_id ASC",
                     (self.task_id,)
                 )
                 rows = cursor.fetchall()

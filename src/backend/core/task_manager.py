@@ -280,8 +280,7 @@ class TaskManager:
             
             # 마지막 체크포인트 경로 찾아서 DB에 기록 (이어하기 용)
             task = db_manager.get_task_details(task_id)
-            tsk_nm = task.get('tsk_nm', 'task')
-            lora_dir = os.path.join(self.base_dir, "outputs", f"{tsk_nm}_{task_id[:8]}")
+            lora_dir = os.path.join(self.base_dir, "outputs", task_id, "lora_adapter")
             
             latest_ckpt = None
             if os.path.exists(lora_dir):
@@ -318,10 +317,7 @@ class TaskManager:
         """태스크 폴더에서 가장 최근 생성된 LoRA 체크포인트 폴더 경로를 반환합니다."""
         if not task_id: return None
         try:
-            task = db_manager.get_task_details(task_id)
-            if not task: return None
-            tsk_nm = task.get('tsk_nm', 'task')
-            lora_dir = os.path.join(self.base_dir, "outputs", f"{tsk_nm}_{task_id[:8]}")
+            lora_dir = os.path.join(self.base_dir, "outputs", task_id, "lora_adapter")
             if os.path.exists(lora_dir):
                 ckpts = [d for d in os.listdir(lora_dir) if d.startswith("checkpoint-")]
                 if ckpts:
