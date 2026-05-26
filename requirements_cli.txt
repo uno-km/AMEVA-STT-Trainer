@@ -1,0 +1,42 @@
+# ======================================================================
+# AMEVA-STT-Trainer CLI-Only Dependencies
+# (Excludes PyQt6 and GUI plotting libraries for lightweight headless runs)
+# ======================================================================
+
+# Core AI / Training / Fine-tuning
+torch
+torchaudio
+transformers
+datasets
+peft
+accelerate
+evaluate
+jiwer
+
+# Audio Acquisition & Preprocessing
+librosa
+soundfile
+pydub
+scipy
+
+# Data Collection & Subtitle Alignment
+yt-dlp
+webvtt-py
+
+# MLOps Telemetry & Task Orchestration
+pandas
+pyyaml
+tqdm
+huggingface-hub
+rich
+psutil
+win10toast
+wandb
+
+# Whisper.cpp Integration & GGUF Quantization
+sentencepiece
+numpy
+gguf
+
+# MLOps High-Fidelity Word Reporting & Charts
+python-docx
