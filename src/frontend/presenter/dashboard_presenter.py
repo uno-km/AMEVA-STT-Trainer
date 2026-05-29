@@ -402,9 +402,13 @@ class DashboardPresenter:
             self.pipeline_mode = "RESUME"
             self.view.wizard.task_name_edit.setText(name)
             self.view.wizard.task_name_edit.setEnabled(False)
-            self.load_parameters_to_ui(task_id, 2)
-            # 설정 화면(stack index 2) 대신 바로 학습 파이프라인 가동
-            self.start_pipeline_from_sop(step=2)
+            
+            if level == 1:
+                self.start_pipeline_from_sop(step=1)
+            else:
+                self.load_parameters_to_ui(task_id, 2)
+                # 설정 화면(stack index 2) 대신 바로 학습 파이프라인 가동
+                self.start_pipeline_from_sop(step=2)
 
     def run_export_pipeline(self):
         """[크래시 버그 철저 방어] 수동 최적화 GGUF 모델 추출 공정 최종 실행"""

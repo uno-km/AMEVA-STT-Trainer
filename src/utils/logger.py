@@ -109,6 +109,11 @@ def error(message: str):
         console.print(f"[bold red]ERR [/] {message}")
     notify_windows("⚠️ AMEVA-STT 오류", message[:100])
 
+def warning(message: str):
+    _write_to_db("WARNING", message)
+    if not state.is_dashboard_active:
+        console.print(f"[bold yellow]WARN[/] {message}")
+
 def success(message: str):
     _write_to_db("SUCCESS", message)
     if not state.is_dashboard_active:

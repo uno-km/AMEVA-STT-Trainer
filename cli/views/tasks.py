@@ -84,19 +84,43 @@ def _show_task_action_menu(task: dict, db_manager):
     while True:
         console.clear()
         status_style = _get_status_style(status)
+        
+        # --- traceback 파서 ---
+        traceback_msg = ""
+        if status in ("FAILED", "CANCELED", "STOPPED"):
+            try:
+                logs = db_manager.get_logs(task_id, limit=20)
+                # reversed get_all returns chronologically, so we check bottom-up by reversing the list
+                for log in reversed(logs):
+                    msg = log.get('message', '')
+                    if any(err in msg for err in ["Error:", "Exception:", "Traceback", "AttributeError", "OutOfMemoryError"]):
+                        traceback_msg = f"\n\n[bold red]❌ 실패 원인:[/bold red] [yellow]{msg.strip()[:200]}[/yellow]"
+                        break
+            except:
+                pass
+                
         console.print(Panel(
             f"[bold]{name}[/bold]\n"
             f"ID: [dim]{task_id}[/dim]\n"
-            f"상태: [{status_style}]{status}[/{status_style}]  |  {_get_level_label(level)}",
+            f"상태: [{status_style}]{status}[/{status_style}]  |  {_get_level_label(level)}{traceback_msg}",
             title="🎯 태스크 액션", expand=False, border_style="cyan"
         ))
 
         options = []
 
-        if level == 1 and status == "SUCCESS":
-            options.append(("1", "➡️  2단계 모델 학습 설정으로 이동 (next_stage)", "next_stage"))
-            options.append(("2", "🔍  1단계 리포트 열기", "view_report"))
-            options.append(("3", "🔄  1단계 처음부터 재수행", "retry_stage"))
+        if level == 1:
+            if status == "SUCCESS":
+                options.append(("1", "➡️  2단계 모델 학습 설정으로 이동 (next_stage)", "next_stage"))
+                options.append(("2", "🔍  1단계 리포트 열기", "view_report"))
+                options.append(("3", "🔄  1단계 처음부터 재수행", "retry_stage"))
+            elif status in ("FAILED", "CANCELED", "STOPPED"):
+                meta_path = os.path.join(project_root, "dataset", f"{name}_{task_id[:8]}", "metadata.csv")
+                has_meta = os.path.exists(meta_path)
+                
+                options.append(("1", "🛠️  1단계 이어서 수집 재개 (resume)", "resume_stage", "bold yellow"))
+                if has_meta:
+                    options.append(("2", "➡️  2단계 모델 학습 설정으로 이동 (중단 시점의 데이터로)", "next_stage", "bold green"))
+                options.append(("3", "🔄  1단계 처음부터 재수행", "retry_stage"))
         elif level == 2:
             if status == "SUCCESS":
                 options.append(("1", "➡️  3단계 내보내기로 이동 (next_stage)", "next_stage"))
@@ -236,21 +260,28 @@ def _launch_action(action: str, task: dict, db_manager, start_train_fn):
     console.clear()
 
     if action == "resume_stage":
-        console.print(Panel("[bold yellow]🛠️ 직전 체크포인트에서 학습 재개[/bold yellow]", expand=False))
-        latest = db_manager.get_latest_checkpoint(task_id, step_level=2)
-        if latest:
-            console.print(f"[green]감지된 체크포인트: {latest['ckpt_name']}[/green]")
-            console.print(f"[dim]경로: {latest['ckpt_path']}[/dim]")
+        if level == 1:
+            console.print(Panel("[bold yellow]🛠️ 1단계 이어서 수집 재개[/bold yellow]", expand=False))
+            step_limit = 2 if Confirm.ask("2단계(학습)까지 자동 연결하시겠습니까?", default=True) else 1
+            payload = {"task_id": task_id, "step_limit": step_limit}
+            res = start_train_fn(payload)
+            console.print(f"[bold green]✅ 이어하기 시작: {res}[/bold green]")
         else:
-            console.print("[yellow]⚠ tb_checkpoint에 기록된 체크포인트가 없습니다. 디스크에서 탐색합니다.[/yellow]")
+            console.print(Panel("[bold yellow]🛠️ 직전 체크포인트에서 학습 재개[/bold yellow]", expand=False))
+            latest = db_manager.get_latest_checkpoint(task_id, step_level=2)
+            if latest:
+                console.print(f"[green]감지된 체크포인트: {latest['ckpt_name']}[/green]")
+                console.print(f"[dim]경로: {latest['ckpt_path']}[/dim]")
+            else:
+                console.print("[yellow]⚠ tb_checkpoint에 기록된 체크포인트가 없습니다. 디스크에서 탐색합니다.[/yellow]")
 
-        row = _get_saved_params(task_id, 2, db_manager)
-        params = _fill_step2_params(row)
-        if not Confirm.ask("\n위 파라미터로 이어서 학습을 재개하시겠습니까?", default=True):
-            return
-        payload = {"task_id": task_id, "step_limit": 2, "step2_params": params}
-        res = start_train_fn(payload)
-        console.print(f"[bold green]✅ 이어하기 시작: {res}[/bold green]")
+            row = _get_saved_params(task_id, 2, db_manager)
+            params = _fill_step2_params(row)
+            if not Confirm.ask("\n위 파라미터로 이어서 학습을 재개하시겠습니까?", default=True):
+                return
+            payload = {"task_id": task_id, "step_limit": 2, "step2_params": params}
+            res = start_train_fn(payload)
+            console.print(f"[bold green]✅ 이어하기 시작: {res}[/bold green]")
 
     elif action == "retry_stage":
         target_step = level

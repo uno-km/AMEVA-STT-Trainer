@@ -105,7 +105,16 @@ def date_to_folder(date_str: str, video_id: str) -> str:
     """
     'YYYYMMDD' 형식의 날짜를 'dataset/YYYY/MM/DD/{video_id}' 절대 경로로 변환한다.
     날짜 파싱 실패 시 'dataset/unknown/{video_id}'로 폴백한다.
+    기존에 동일한 video_id 폴더가 dataset 하위에 존재할 경우 해당 경로를 그대로 반환해 중복 다운로드를 차단합니다.
     """
+    # [중복 차단] 기존에 이미 다운로드된 video_id 폴더가 존재한다면 그 경로를 우선 재사용
+    if os.path.exists(DATASET_DIR):
+        for root, dirs, files in os.walk(DATASET_DIR):
+            if video_id in dirs:
+                existing_path = os.path.join(root, video_id)
+                if os.path.exists(os.path.join(existing_path, "raw.wav")):
+                    return existing_path
+
     try:
         # 날짜가 최소 8자리(YYYYMMDD)인지 확인
         if len(date_str) < 8:
@@ -207,7 +216,7 @@ def sanitize_channel_url(url: str) -> str:
 #  전체 채널 수집 진입점                                                          #
 # ---------------------------------------------------------------------------- #
 
-def scrape_channel(url: str = None, count: int = None) -> List[VideoInfo]:
+def scrape_channel(url: str = None, count: int = None, target_dir: str = None) -> List[VideoInfo]:
     """
     제공된 URL 혹은 설정의 채널에서 최신 N개 영상을 수집한다.
     VideoInfo 리스트를 반환한다.
@@ -222,14 +231,40 @@ def scrape_channel(url: str = None, count: int = None) -> List[VideoInfo]:
     # 수집 결과를 담을 리스트 초기화
     results: List[VideoInfo] = []
 
+    # 기존 파일 개수 계산 (스킵할 영상 카운트)
+    existing_count = 0
+    if target_dir and os.path.exists(target_dir):
+        raw_dir = os.path.join(target_dir, "raw")
+        if os.path.exists(raw_dir):
+            for video_id, _, _ in pairs:
+                path = os.path.join(raw_dir, video_id, "raw.wav")
+                if os.path.exists(path) and os.path.getsize(path) > 0:
+                    existing_count += 1
+    elif not target_dir and os.path.exists(DATASET_DIR):
+        for video_id, _, _ in pairs:
+            # global date_to_folder fallback check
+            for root, dirs, files in os.walk(DATASET_DIR):
+                if video_id in dirs:
+                    existing_path = os.path.join(root, video_id)
+                    if os.path.exists(os.path.join(existing_path, "raw.wav")):
+                        existing_count += 1
+                        break
+
+    remaining_count = len(pairs) - existing_count
+    logger.info(f"▶ [수집 분석] 전체 {len(pairs)}개 영상 중 이미 다운로드된 {existing_count}개 영상을 제외하고, 나머지 {remaining_count}개 영상의 수집을 시작합니다.")
+
     # 각 영상에 대해 폴더 경로 결정 후 오디오·자막 다운로드
     for idx, (video_id, date_str, title) in enumerate(pairs):
         # 대시보드 상태 업데이트: 현재 다운로드 중인 영상 제목 표시
         display_title = (title[:25] + "..") if len(title) > 25 else title
         logger.set_status("유튜브 수집 중", f"[{idx+1}/{len(pairs)}] {display_title}")
         
-        # 날짜 기반 저장 폴더 경로 계산
-        video_dir = date_to_folder(date_str, video_id)
+        # [수정] 태스크 격리 폴더가 있으면 해당 폴더의 raw 하위로 격리 저장
+        if target_dir:
+            video_dir = os.path.join(target_dir, "raw", video_id)
+        else:
+            video_dir = date_to_folder(date_str, video_id)
+            
         # 다운로드 실행 후 결과 경로 수신 (실패 항목은 None)
         audio_path, vtt_path = download_video_data(video_id, video_dir) or (None, None)
         results.append((video_id, date_str, audio_path, vtt_path))
@@ -239,6 +274,25 @@ def scrape_channel(url: str = None, count: int = None) -> List[VideoInfo]:
             size_mb = os.path.getsize(audio_path) / (1024 * 1024)
             folder_rel = os.path.relpath(video_dir, os.getcwd())
             logger.info(f"▶ [수집 완료] {idx+1}/{len(pairs)} - 제목: {title} | ID: {video_id} | 용량: {size_mb:.2f}MB | 폴더: {folder_rel}")
+            
+            # [DB tb_metadata 저장]
+            task_id = os.environ.get("CURRENT_TASK_ID")
+            if task_id:
+                try:
+                    from src.backend.core.database import db_manager
+                    with db_manager.get_connection() as conn:
+                        cur = conn.cursor()
+                        # 중복 기록 방지 검사
+                        cur.execute('SELECT 1 FROM tb_metadata WHERE task_id = ? AND file_name = ?', (task_id, video_id))
+                        if not cur.fetchone():
+                            create_dt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            cur.execute('''
+                                INSERT INTO tb_metadata (task_id, file_name, folder_path, create_dt)
+                                VALUES (?, ?, ?, ?)
+                            ''', (task_id, video_id, video_dir, create_dt))
+                            conn.commit()
+                except Exception as e:
+                    logger.warning(f"tb_metadata DB 저장 실패: {e}")
         else:
             logger.warning(f"▶ [수집 실패] {idx+1}/{len(pairs)} - 제목: {title} | ID: {video_id}")
 

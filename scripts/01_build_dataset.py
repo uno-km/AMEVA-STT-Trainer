@@ -227,7 +227,7 @@ def main():
             logger.info(f"▶ [데이터 수집 시작] 로컬 폴더 '{args.folder}' 에서 파일 스캔 및 매칭을 시작합니다.")
 
         if not is_local:
-            video_list = scrape_channel(url=args.url, count=args.count)
+            video_list = scrape_channel(url=args.url, count=args.count, target_dir=target_dir)
         else:
             folder_path = args.folder
             logger.info(f"로컬 폴더 모드 가동: {folder_path}")
@@ -276,7 +276,22 @@ def main():
         # 2. 오디오 전처리 및 청크 분할
         logger.set_status("오디오 전처리 중", "병렬 처리 및 자막 병합")
         all_entries = []
+        processed_vids = set()
         
+        # --- 1단계 이어하기 보존 (Incremental Load) ---
+        if os.path.exists(local_metadata_path):
+            try:
+                existing_df = pd.read_csv(local_metadata_path)
+                def extract_vid(path_str):
+                    parts = path_str.replace("\\", "/").split("/")
+                    return parts[-3] if len(parts) >= 5 else None
+                vids = existing_df['file_name'].apply(extract_vid).dropna().unique()
+                processed_vids.update(vids)
+                all_entries.extend(existing_df.to_dict('records'))
+                logger.info(f"▶ 기존 메타데이터 발견! ({len(existing_df)}개 청크, {len(processed_vids)}개 영상). 이어서 전처리를 시작합니다.")
+            except Exception as e:
+                logger.warning(f"기존 메타데이터 로드 실패: {e}")
+
         # 글로벌 파이프라인 이벤트 카운터 초기화
         from src.data.processor import PIPELINE_COUNTERS
         PIPELINE_COUNTERS["invalid_timestamp_skip"] = 0
@@ -288,6 +303,7 @@ def main():
         logger.info("▶ [전처리 준비] 자막 파일 분석을 통한 예상 총 청크 개수 계산 중...")
         total_expected_chunks = 0
         for vid, date_str, a_path, v_path in video_list:
+            if vid in processed_vids: continue
             if v_path and os.path.exists(v_path):
                 total_expected_chunks += estimate_video_chunks(v_path)
         logger.info(f"▶ [전처리 준비 완료] 전체 {len(video_list)}개 자막 스트림 분석 완료. 예상 최종 청크 수: {total_expected_chunks}개")
@@ -297,6 +313,9 @@ def main():
 
         for i, (vid, date_str, a_path, v_path) in enumerate(video_list):
             if not a_path or not v_path: continue
+            if vid in processed_vids:
+                logger.info(f"▶ [SKIP] 이미 전처리 완료된 영상입니다: {vid}")
+                continue
             logger.set_status("오디오 전처리 중", f"[{i+1}/{len(video_list)}] {vid} 분할 중")
             # [수정] target_dir을 넘겨서 해당 폴더에 청크 저장
             entries = process_video(vid, date_str, a_path, v_path, mode=args.mode, output_dir=target_dir)
@@ -306,6 +325,10 @@ def main():
             completed_chunks += len(entries)
             pct = (completed_chunks / total_expected_chunks) * 100 if total_expected_chunks > 0 else 0
             logger.info(f"▶ [청킹 진행] [{i+1}/{len(video_list)}] 영상 '{vid}' 분할 완료 (+{len(entries)}개 청크) -> 누적 {completed_chunks}/{total_expected_chunks}개 ({pct:.1f}%)")
+            
+            # --- 중간 저장 (Incremental Save) ---
+            df_temp = pd.DataFrame(all_entries)
+            df_temp.to_csv(local_metadata_path, index=False, encoding="utf-8-sig")
             
             # 10% 마일스톤 돌파 감지 및 알림
             current_10_block = int(pct // 10) * 10
@@ -324,6 +347,25 @@ def main():
             
             # 리포트 출력 (격리된 경로 기준)
             run_full_investigation(local_metadata_path, target_dir)
+            
+            # --- DB tb_chunk 동기화 ---
+            if task_id:
+                try:
+                    from src.backend.core.database import db_manager
+                    from datetime import datetime
+                    with db_manager.get_connection() as conn:
+                        cur = conn.cursor()
+                        create_dt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        for entry in all_entries:
+                            cur.execute('''
+                                INSERT INTO tb_chunk (task_id, chunk_path, transcript, create_dt)
+                                VALUES (?, ?, ?, ?)
+                            ''', (task_id, entry['file_name'], entry.get('transcription_clean', entry.get('transcription')), create_dt))
+                        conn.commit()
+                        logger.info(f"▶ DB tb_chunk 동기화 완료 ({len(all_entries)}개 청크)")
+                except Exception as e:
+                    logger.warning(f"tb_chunk DB 동기화 실패: {e}")
+
             logger.success(f"--- [1단계 완료] 태스크 {task_id} 데이터셋 구축 성공 ---")
         else:
             logger.error("데이터셋 구축 실패: 생성된 데이터가 없습니다.")

@@ -79,9 +79,36 @@ class TaskManager:
         if step_limit == 3 and step3_params:
             db_manager.add_task_dtl(task_id, step_seq=3, step_name="Export", parameters=json.dumps(step3_params), next_step=None)
             
-        # [해결] 이미 2단계 학습에 진입했었던 이력이 있고(level >= 2), 사용자가 3단계(내보내기) 실행을 지시한 경우 (성공/중단 여부 무관)
         task = db_manager.get_task_details(task_id)
         current_level = task.get('level', 1) if task else 1
+        
+        # [해결] 1단계 재개 (수집 실패 시 이어하기)
+        if current_level == 1:
+            db_manager.update_task_status(task_id, 1, "RUNNING", "Step 1: Data Preparation resuming...")
+            params = {}
+            try:
+                with db_manager.get_connection() as conn:
+                    cur = conn.cursor()
+                    cur.execute("SELECT parameters FROM tb_task_dtl WHERE task_id=? AND step_seq=1 ORDER BY dtl_id DESC LIMIT 1", (task_id,))
+                    row = cur.fetchone()
+                    if row:
+                        params = json.loads(row[0])
+            except:
+                pass
+            
+            # 다음 단계를 위한 정보도 업데이트
+            if step_limit >= 2:
+                # 1단계의 next_step을 업데이트 (체이닝 연결)
+                try:
+                    with db_manager.get_connection() as conn:
+                        cur = conn.cursor()
+                        cur.execute("UPDATE tb_task_dtl SET next_step=2 WHERE task_id=? AND step_seq=1", (task_id,))
+                        conn.commit()
+                except:
+                    pass
+
+            self._run_data_script(task_id, params)
+            return {"id": task_id, "status": "Data Prep Resumed"}
         
         is_step2_attempted = (current_level >= 2)
         
@@ -239,6 +266,16 @@ class TaskManager:
             "--count", str(params.get("count", 5)),
             "--folder", params.get("folder", "")
         ]
+        
+        # [중요] 태스크 격리 폴더명을 전달하여 dataset/태스크명/raw/... 경로로 다운로드되도록 보장
+        task_name = params.get("name")
+        if not task_name:
+            task_details = db_manager.get_task_details(task_id)
+            if task_details:
+                task_name = f"{task_details['tsk_nm']}_{task_id[:8]}"
+        if task_name:
+            cmd.extend(["--name", task_name])
+            
         # [버그 방어] 1단계 가동 시 명확히 level=1 명시
         self._run_script_async(cmd, task_id, level=1)
 
@@ -287,7 +324,17 @@ class TaskManager:
         """실행 중인 프로세스를 강제 종료하고 상태를 업데이트합니다."""
         process = self.active_processes.get(task_id)
         if not process:
-            return {"status": "Error", "message": "해당 태스크의 실행 중인 프로세스를 찾을 수 없습니다."}
+            # [버그 방어] CLI 재기동 등으로 active_processes 맵이 비어있을 때도 DB 상태를 강제로 FAILED로 풀어내어 복구할 수 있도록 함
+            task = db_manager.get_task_details(task_id)
+            if task:
+                db_manager.update_task_status(
+                    task_id, 
+                    task.get('level', 1), 
+                    "FAILED", 
+                    log_msg="사용자에 의해 강제 종료 및 상태 강제 초기화되었습니다."
+                )
+                return {"status": "Killed", "task_id": task_id, "message": "실행 프로세스는 없으나 DB 상태를 FAILED로 강제 복구했습니다."}
+            return {"status": "Error", "message": "해당 태스크를 찾을 수 없습니다."}
             
         try:
             import psutil

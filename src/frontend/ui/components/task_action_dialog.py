@@ -54,6 +54,24 @@ class TaskActionDialog(QDialog):
         state_lbl.setStyleSheet(f"color: {color}; font-weight: bold; font-size: 12px; margin-bottom: 10px;")
         layout.addWidget(state_lbl)
         
+        if status in ("FAILED", "CANCELED", "STOPPED"):
+            try:
+                from src.backend.core.database import db_manager
+                logs = db_manager.get_logs(task_data['id'], limit=20)
+                trace_msg = ""
+                for log in reversed(logs):
+                    msg = log.get('message', '')
+                    if any(err in msg for err in ["Error:", "Exception:", "Traceback", "AttributeError", "OutOfMemoryError"]):
+                        trace_msg = msg.strip()[:200]
+                        break
+                if trace_msg:
+                    trace_lbl = QLabel(f"❌ 실패 원인: {trace_msg}")
+                    trace_lbl.setWordWrap(True)
+                    trace_lbl.setStyleSheet(f"color: {ctx.get_color('error')}; margin-bottom: 10px; font-weight: bold;")
+                    layout.addWidget(trace_lbl)
+            except:
+                pass
+
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.HLine)
         sep.setStyleSheet(f"background-color: {ctx.get_color('border')}; max-height: 1px;")
@@ -61,9 +79,20 @@ class TaskActionDialog(QDialog):
         
         # 버튼 분기 렌더링
         if level == 1:
-            self.add_btn("➡️ 2단계 모델 학습(Fine-Tuning) 설정으로 이동", "next_stage", ctx.get_color('accent'))
-            self.add_btn("🔍 1단계 데이터 구축/검수 리포트 열기", "view_report")
-            self.add_btn("🔄 1단계 데이터 구축 처음부터 재수행", "retry_stage")
+            if status == "SUCCESS":
+                self.add_btn("➡️ 2단계 모델 학습(Fine-Tuning) 설정으로 이동", "next_stage", ctx.get_color('accent'))
+                self.add_btn("🔍 1단계 데이터 구축/검수 리포트 열기", "view_report")
+                self.add_btn("🔄 1단계 데이터 구축 처음부터 재수행", "retry_stage")
+            else:
+                import os
+                project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", ".."))
+                meta_path = os.path.join(project_root, "dataset", f"{name}_{task_data['id'][:8]}", "metadata.csv")
+                has_meta = os.path.exists(meta_path)
+                
+                self.add_btn("🛠️ 1단계 이어서 수집 재개 (Resume)", "resume_stage", ctx.get_color('warning'))
+                if has_meta:
+                    self.add_btn("➡️ 2단계 모델 학습 설정으로 이동 (중단 시점의 데이터로)", "next_stage", ctx.get_color('success'))
+                self.add_btn("🔄 1단계 데이터 구축 처음부터 재수행", "retry_stage")
         elif level == 2:
             self.add_btn("➡️ 3단계 모델 최적화/내보내기 설정으로 이동", "next_stage", ctx.get_color('accent'))
             if status in ["FAILED", "CANCELED", "STOPPED"]:

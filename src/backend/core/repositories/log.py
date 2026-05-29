@@ -23,12 +23,14 @@ class LogRepository(BaseRepository):
             cursor = conn.cursor()
             if task_id:
                 cursor.execute(
-                    'SELECT * FROM tb_log WHERE task_id = ? ORDER BY create_dt ASC LIMIT ?', 
+                    'SELECT * FROM tb_log WHERE task_id = ? ORDER BY log_id DESC LIMIT ?', 
                     (task_id, limit)
                 )
             else:
                 cursor.execute(
-                    'SELECT * FROM tb_log ORDER BY create_dt ASC LIMIT ?', 
+                    'SELECT * FROM tb_log ORDER BY log_id DESC LIMIT ?', 
                     (limit,)
                 )
-            return [dict(row) for row in cursor.fetchall()]
+            rows = [dict(row) for row in cursor.fetchall()]
+            rows.reverse()
+            return rows

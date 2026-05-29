@@ -75,7 +75,7 @@ def watch_logs(task_id: str = None):
             while True:
                 # ── 로그 ──
                 db_logs = db_manager.get_logs(task_id, limit=60)
-                log_rows = list(reversed(db_logs))[-25:]
+                log_rows = db_logs[-25:]
 
                 log_table = Table(box=box.MINIMAL, show_header=False, expand=True)
                 log_table.add_column("시간", style="dim", width=10, no_wrap=True)
