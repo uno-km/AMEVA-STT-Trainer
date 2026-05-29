@@ -85,6 +85,8 @@ def validate_dataset(metadata_path: str = METADATA_PATH, dataset_dir: str = DATA
 
     # 모든 레코드를 행 단위로 순회하며 3가지 검사 수행
     for idx, row in df.iterrows():
+        if idx > 0 and idx % 1000 == 0:
+            logger.info(f"검수 진행 중... [{idx}/{total}] ({(idx/total)*100:.1f}%)")
         file_name     = str(row.get("file_name", "")).strip()
         transcription = str(row.get("transcription", "")).strip()
         transcription_clean = str(row.get("transcription_clean", transcription)).strip()

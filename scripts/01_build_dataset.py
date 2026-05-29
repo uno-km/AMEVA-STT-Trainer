@@ -47,88 +47,141 @@ def run_full_investigation(metadata_path=METADATA_PATH, dataset_dir=DATASET_DIR)
     df = pd.read_csv(metadata_path)
     total_records = len(df)
     
-    # 1. 파일 존재 여부 및 오디오 물리 통계 수집
-    from pydub import AudioSegment
-    import numpy as np
-    import re
-    
-    missing_count = 0
-    durations = []
-    cps_list = []
-    dbfs_list = []
-    
-    # 중복 감지 상세 내역용 리스트
-    repetition_samples = []
-    stutter_count = 0
-    
     col_name = 'transcription_clean' if 'transcription_clean' in df.columns else 'transcription'
     raw_col_name = 'transcription'
     
-    for idx, row in df.iterrows():
-        file_name = row['file_name']
-        abs_path = os.path.join(dataset_dir, file_name)
-        
-        if not os.path.exists(abs_path):
-            missing_count += 1
-            continue
-            
-        # 1-1. 오디오 정보 및 통계 추출
+    audit_summary_path = os.path.join(dataset_dir, "audit_summary.json")
+    repetition_csv_path = os.path.join(dataset_dir, "repetition_samples.csv")
+    
+    loaded_from_audit = False
+    
+    if os.path.exists(audit_summary_path):
         try:
-            audio = AudioSegment.from_wav(abs_path)
-            dur_sec = len(audio) / 1000.0
-            durations.append(dur_sec)
+            import json
+            with open(audit_summary_path, "r", encoding="utf-8") as f:
+                audit_data = json.load(f)
+                
+            dist_stats = audit_data["audio_distribution_stats"]
             
-            clean_text = str(row.get(col_name, "")).strip()
-            raw_text = str(row.get(raw_col_name, "")).strip()
+            total_hours = dist_stats["total_hours"]
+            total_minutes = total_hours * 60.0
             
-            if dur_sec > 0:
-                cps_list.append(len(clean_text) / dur_sec)
-            dbfs_list.append(audio.dBFS if audio.dBFS != float('-inf') else -96.0)
-        except Exception:
-            continue
+            avg_dur = dist_stats["duration"]["mean"]
+            med_dur = dist_stats["duration"]["p50"]
+            min_dur = dist_stats["duration"]["min"]
+            max_dur = dist_stats["duration"]["max"]
             
-        # 1-2. 구어체 연속 반복(adjacent n-gram) 상세 분석
-        words = [w for w in clean_text.split() if w and re.match(r'^[a-zA-Z0-9가-힣]+$', w)]
-        if len(words) >= 2:
-            has_repeat = False
-            repeated_pattern = None
-            repeat_n = 0
-            for n in (1, 2, 3):
-                if len(words) >= n * 2:
-                    grams = [tuple(words[i:i+n]) for i in range(len(words)-n+1)]
-                    for i in range(len(grams) - n):
-                        if grams[i] == grams[i+n]:
-                            has_repeat = True
-                            repeated_pattern = " ".join(grams[i])
-                            repeat_n = n
-                            break
-                if has_repeat:
-                    break
-            if has_repeat:
-                stutter_count += 1
-                if len(repetition_samples) < 5:
+            avg_cps = dist_stats["cps"]["mean"]
+            med_cps = dist_stats["cps"]["p50"]
+            max_cps = dist_stats["cps"]["max"]
+            
+            avg_dbfs = dist_stats["dbfs"]["mean"]
+            med_dbfs = dist_stats["dbfs"]["p50"]
+            
+            stutter_count = audit_data["deduplication_audit"]["consecutive_repetition_count"]
+            missing_count = 0
+            
+            repetition_samples = []
+            if os.path.exists(repetition_csv_path):
+                rep_df = pd.read_csv(repetition_csv_path)
+                for _, r in rep_df.head(5).iterrows():
                     repetition_samples.append({
-                        "file_name": file_name,
-                        "pattern": repeated_pattern,
-                        "n": repeat_n,
-                        "text": raw_text
+                        "file_name": r["file_name"],
+                        "pattern": r["pattern"],
+                        "n": r["n_gram_size"],
+                        "text": r["transcription"]
                     })
+            loaded_from_audit = True
+            logger.info("기존 검수 요약 파일(audit_summary.json)에서 통계 데이터를 고속으로 로드했습니다.")
+        except Exception as e:
+            logger.warning(f"Audit Summary 파일 로드 실패로 직접 스캔을 수행합니다: {e}")
+            
+    if not loaded_from_audit:
+        # 1. 파일 존재 여부 및 오디오 물리 통계 수집
+        from pydub import AudioSegment
+        import numpy as np
+        import re
+        
+        missing_count = 0
+        durations = []
+        cps_list = []
+        dbfs_list = []
+        
+        # 중복 감지 상세 내역용 리스트
+        repetition_samples = []
+        stutter_count = 0
+        
+        for idx, row in df.iterrows():
+            if idx > 0 and idx % 1000 == 0:
+                logger.info(f"프로파일러 분석 진행 중... [{idx}/{total_records}] ({(idx/total_records)*100:.1f}%)")
+            
+            file_name = row['file_name']
+            abs_path = os.path.join(dataset_dir, file_name)
+            
+            if not os.path.exists(abs_path):
+                missing_count += 1
+                continue
+                
+            # 1-1. 오디오 정보 및 통계 추출
+            try:
+                audio = AudioSegment.from_wav(abs_path)
+                dur_sec = len(audio) / 1000.0
+                durations.append(dur_sec)
+                
+                clean_text = str(row.get(col_name, "")).strip()
+                raw_text = str(row.get(raw_col_name, "")).strip()
+                
+                if dur_sec > 0:
+                    cps_list.append(len(clean_text) / dur_sec)
+                dbfs_list.append(audio.dBFS if audio.dBFS != float('-inf') else -96.0)
+            except Exception:
+                continue
+                
+            # 1-2. 구어체 연속 반복(adjacent n-gram) 상세 분석
+            words = [w for w in clean_text.split() if w and re.match(r'^[a-zA-Z0-9가-힣]+$', w)]
+            if len(words) >= 2:
+                has_repeat = False
+                repeated_pattern = None
+                repeat_n = 0
+                for n in (1, 2, 3):
+                    if len(words) >= n * 2:
+                        grams = [tuple(words[i:i+n]) for i in range(len(words)-n+1)]
+                        for i in range(len(grams) - n):
+                            if grams[i] == grams[i+n]:
+                                has_repeat = True
+                                repeated_pattern = " ".join(grams[i])
+                                repeat_n = n
+                                break
+                    if has_repeat:
+                        break
+                if has_repeat:
+                    stutter_count += 1
+                    if len(repetition_samples) < 5:
+                        repetition_samples.append({
+                            "file_name": file_name,
+                            "pattern": repeated_pattern,
+                            "n": repeat_n,
+                            "text": raw_text
+                        })
+        
+        # 기술 통계량 연산
+        avg_dur = np.mean(durations) if durations else 0.0
+        med_dur = np.median(durations) if durations else 0.0
+        min_dur = np.min(durations) if durations else 0.0
+        max_dur = np.max(durations) if durations else 0.0
+        
+        avg_cps = np.mean(cps_list) if cps_list else 0.0
+        med_cps = np.median(cps_list) if cps_list else 0.0
+        max_cps = np.max(cps_list) if cps_list else 0.0
+        
+        avg_dbfs = np.mean(dbfs_list) if dbfs_list else 0.0
+        med_dbfs = np.median(dbfs_list) if dbfs_list else 0.0
+        
+        total_hours = sum(durations) / 3600.0
+        total_minutes = sum(durations) / 60.0
 
     # 2. 날짜 누락 분석
     na_count = df[df['file_name'].str.startswith('NA', na=False)].shape[0]
-
-    # 3. 기술 통계량 연산
-    avg_dur = np.mean(durations) if durations else 0.0
-    med_dur = np.median(durations) if durations else 0.0
-    min_dur = np.min(durations) if durations else 0.0
-    max_dur = np.max(durations) if durations else 0.0
-    
-    avg_cps = np.mean(cps_list) if cps_list else 0.0
-    med_cps = np.median(cps_list) if cps_list else 0.0
-    max_cps = np.max(cps_list) if cps_list else 0.0
-    
-    avg_dbfs = np.mean(dbfs_list) if dbfs_list else 0.0
-    med_dbfs = np.median(dbfs_list) if dbfs_list else 0.0
 
     # 결과 리포트 출력용 Rich 콘솔 가동
     from rich.console import Console
@@ -159,7 +212,7 @@ def run_full_investigation(metadata_path=METADATA_PATH, dataset_dir=DATASET_DIR)
 
     # [2] 물리 데이터 분포 상세 통계
     console.print("[bold yellow]  [1] 물리 데이터 분포 상세 통계 (Physical Distribution Stats)[/]")
-    console.print(f"  * [bold white]총 학습 오디오 시간 (Total Length)[/]: {sum(durations)/60:.2f}분 ({sum(durations)/3600:.3f}시간)")
+    console.print(f"  * [bold white]총 학습 오디오 시간 (Total Length)[/]: {total_minutes:.2f}분 ({total_hours:.3f}시간)")
     console.print(f"  * [bold white]세그먼트 길이 (Duration)[/]: 평균 {avg_dur:.2f}초 | 중앙값 {med_dur:.2f}초 | 최소 {min_dur:.2f}초 | 최대 {max_dur:.2f}초")
     console.print(f"  * [bold white]발화 속도/텍스트 밀도 (CPS)[/]: 평균 {avg_cps:.2f}자/초 | 중앙값 {med_cps:.2f}자/초 (최대 {max_cps:.2f}자/초)")
     console.print(f"  * [bold white]오디오 음량 에너지 (dBFS)[/]: 평균 {avg_dbfs:.2f} dBFS | 중앙값 {med_dbfs:.2f} dBFS (Peak Normalization 완료)")

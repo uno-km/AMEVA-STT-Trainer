@@ -242,6 +242,11 @@ def run_training(resume_from_checkpoint: str = None, task_id: str = None):
     logger.info(f"[INFO] 학습 데이터 로드 완료: 총 {len(df)}개의 샘플을 준비했습니다.")
 
     # ---- [2단계] 모델 및 프로세서(토크나이저) 로딩 ----
+    if CFG["model_id"] == "small":
+        CFG["model_id"] = "openai/whisper-small"
+    elif CFG["model_id"] == "tiny":
+        CFG["model_id"] = "openai/whisper-tiny"
+        
     model_id = CFG["model_id"]  # 덮어쓰기 완료된 타겟 모델명 로드
     
     # 윈도우 CPU 환경에서의 안정성 및 메모리 누수 방지를 위한 특수 매개변수 주입
