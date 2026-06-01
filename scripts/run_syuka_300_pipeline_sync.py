@@ -9,8 +9,14 @@ import sys
 import json
 import subprocess
 
-# 프로젝트 루트를 Python 경로에 등록
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+# 프로젝트 루트를 Python 경로에 등록하고 작업 디렉터리를 루트로 고정
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, PROJECT_ROOT)
+
+# 실행 경로 보정: scripts 폴더 안에서 실행했어도 프로젝트 루트 폴더 기준으로 강제 전환
+if os.path.basename(os.getcwd()) == "scripts":
+    os.chdir(PROJECT_ROOT)
+
 
 from src.backend.core.database import db_manager
 from src.utils import logger
