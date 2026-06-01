@@ -55,6 +55,7 @@ def get_video_info_list(channel_url: str, count: int) -> List[Tuple[str, str, st
         "--playlist-items", f"1:{count}",      # 최신 count개만 가져오기
         "--flat-playlist",                     # 영상 내용은 다운로드하지 않고 목록만 수집
         "--no-warnings",
+        "--extractor-args", "youtube:player_client=android,web"
     ]
     
     cookie_path = os.path.abspath("cookies.txt")
@@ -167,6 +168,7 @@ def download_video_data(video_id: str, video_dir: str) -> Tuple[Optional[str], O
             "--audio-quality", "0",
             "--postprocessor-args", f"ffmpeg:-ar {sr} -ac 1",
             "--no-playlist",
+            "--extractor-args", "youtube:player_client=android,web"
         ]
         if os.path.exists(cookie_path):
             audio_cmd.extend(["--cookies", cookie_path])
@@ -198,6 +200,7 @@ def download_video_data(video_id: str, video_dir: str) -> Tuple[Optional[str], O
             "--write-auto-subs", "--sub-format", "vtt", "--sub-langs", "ko",
             "--skip-download",   # 오디오는 위에서 이미 받았으므로 재다운 방지
             "--no-playlist",
+            "--extractor-args", "youtube:player_client=android,web"
         ]
         if os.path.exists(cookie_path):
             vtt_cmd.extend(["--cookies", cookie_path])
