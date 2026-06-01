@@ -18,6 +18,17 @@ if os.path.exists(FFMPEG_C_PATH):
     if FFMPEG_BIN_DIR not in os.environ.get("PATH", ""):
         os.environ["PATH"] = FFMPEG_BIN_DIR + os.pathsep + os.environ.get("PATH", "")
 
+# --- Deno (yt-dlp용 JavaScript 런타임) 경로 자동 등록 ---
+for deno_path in [
+    os.path.expanduser("~/.deno/bin"),
+    "/root/.deno/bin",
+    os.path.expanduser("~/.local/bin"),
+    "/usr/local/bin"
+]:
+    if os.path.exists(deno_path):
+        if deno_path not in os.environ.get("PATH", ""):
+            os.environ["PATH"] = deno_path + os.pathsep + os.environ.get("PATH", "")
+
 import pandas as pd
 from collections import Counter
 from rich.table import Table
@@ -246,8 +257,8 @@ def main():
     parser.add_argument("--mode", type=str, default="basic", choices=["basic", "advanced"], help="전처리 모드 선택")
     parser.add_argument("--task-id", type=str, help="태스크 ID (자동화 연동용)")
     parser.add_argument("--source_type", type=str, default="youtube")
-    parser.add_argument("--url", type=str, default="")
-    parser.add_argument("--count", type=int, default=5)
+    parser.add_argument("--url", "--channel_url", dest="url", type=str, default="")
+    parser.add_argument("--count", "--max_videos", dest="count", type=int, default=5)
     parser.add_argument("--folder", type=str, default="")
     parser.add_argument("--name", type=str, help="태스크 전용 폴더명")
     args = parser.parse_args()

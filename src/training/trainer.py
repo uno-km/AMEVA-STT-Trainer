@@ -135,10 +135,16 @@ def dataset_generator(audio_list: List[str], transcription_list: List[str], mode
     """
     from transformers import WhisperFeatureExtractor, WhisperTokenizer
     
+    # 코랩 환경(온라인)이면 False, 폐쇄망(오프라인) 환경이면 True로 자동 변경
+    try:
+        import google.colab
+        local_files_only = False
+    except ImportError:
+        local_files_only = True
+    
     # 1. 피클링(Pickle) 직렬화 에러를 완벽 차단하기 위해 제너레이터 함수 스코프 내에서 객체 격리 초기화
-    # (인터넷 차단 독립망 환경 구동을 위해 local_files_only=True 인자를 필수로 할당)
-    fe = WhisperFeatureExtractor.from_pretrained(model_id, local_files_only=True)
-    tk = WhisperTokenizer.from_pretrained(model_id, language=language, task=task, local_files_only=True)
+    fe = WhisperFeatureExtractor.from_pretrained(model_id, local_files_only=local_files_only)
+    tk = WhisperTokenizer.from_pretrained(model_id, language=language, task=task, local_files_only=local_files_only)
     
     count = 0  # 실시간 데이터 로딩 카운터 초기화
     from src.utils import logger
@@ -252,11 +258,16 @@ def run_training(resume_from_checkpoint: str = None, task_id: str = None):
     # 윈도우 CPU 환경에서의 안정성 및 메모리 누수 방지를 위한 특수 매개변수 주입
     #   - torch_dtype=torch.float32: CPU 하드웨어에 최적화된 표준 정밀도 연산 강제
     #   - low_cpu_mem_usage=False: 윈도우 가상메모리 할당 에러(WinError 1455) 충돌 원천 차단
+    try:
+        import google.colab
+        local_files_only = False
+    except ImportError:
+        local_files_only = True
     model = WhisperForConditionalGeneration.from_pretrained(
         model_id, 
         torch_dtype=torch.float32, 
         low_cpu_mem_usage=False,
-        local_files_only=True  # 망 분리 환경을 고려한 절대 로컬 로딩
+        local_files_only=local_files_only  # 코랩(온라인) 시 자동 인터넷 다운로드 허용
     )
     
     # 학습 방해 요소(디코딩 강제 매핑 및 유실 억제 토큰) 제거

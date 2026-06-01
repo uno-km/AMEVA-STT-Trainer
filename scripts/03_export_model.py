@@ -36,7 +36,11 @@ def main():
     parser.add_argument("--no-quantize", action="store_true", help="양자화 단계를 건너뛰고 원본 FP 모델만 생성합니다.")
     parser.add_argument("--only-quantize", action="store_true", help="병합 단계를 건너뛰고 기존 바이너리에 대한 양자화만 수행합니다.")
     parser.add_argument("--method", type=str, default="q4_0", help="양자화 방식 (기본값: q4_0)")
+    parser.add_argument("--task-id", type=str, help="태스크 ID (DB 연동용)")
     args = parser.parse_args()
+
+    if args.task_id:
+        os.environ["CURRENT_TASK_ID"] = args.task_id
 
     try:
         print("\n" + "=" * 50)
@@ -47,7 +51,26 @@ def main():
         whisper_cpp_dir = os.path.join(os.path.dirname(__file__), "..", "third_party", "whisper.cpp")
         quantizer = WhisperQuantizer(whisper_cpp_dir=whisper_cpp_dir)
         
-        final_model_name = f"ggml-shuka-tiny-{args.method}.bin"
+        model_name_prefix = "shuka-tiny"
+        task_id = os.environ.get("CURRENT_TASK_ID")
+        if task_id:
+            try:
+                from src.backend.core.database import db_manager
+                import json
+                task_details = db_manager.get_task_details(task_id)
+                if task_details and 'details' in task_details:
+                    for dtl in task_details['details']:
+                        if dtl.get('step_seq') == 2:  # Training step
+                            params = json.loads(dtl.get('parameters', '{}'))
+                            model_id = params.get('model_id', '')
+                            if model_id:
+                                base_name = model_id.split('/')[-1]
+                                model_name_prefix = f"shuka-{base_name}"
+                                break
+            except Exception as ex:
+                print(f"[*] 태스크 정보에서 모델명을 가져오지 못해 기본값(shuka-tiny)을 적용합니다: {ex}")
+        
+        final_model_name = f"ggml-{model_name_prefix}-{args.method}.bin"
         merged_path = MERGED_DIR
 
         # ---- 단독 양자화(후처리) 모드 ----

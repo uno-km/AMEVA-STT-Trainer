@@ -19,9 +19,14 @@ class WhisperQuantizer:
             self.quantize_bin += ".exe"
 
     def ensure_tool(self):
-        """whisper.cpp 도구가 없으면 클론하고 빌드 준비를 한다."""
-        if not os.path.exists(self.whisper_cpp_dir):
-            logger.info("whisper.cpp 도구가 없습니다. 자동으로 클론을 시작합니다...")
+        """whisper.cpp 도구가 없거나 불완전하면 클론하고 빌드 준비를 한다."""
+        if not os.path.exists(self.whisper_cpp_dir) or not os.path.exists(self.converter_script):
+            logger.info("whisper.cpp 도구가 없거나 불완전합니다. 자동으로 클론을 시작합니다...")
+            if os.path.exists(self.whisper_cpp_dir):
+                try:
+                    shutil.rmtree(self.whisper_cpp_dir)
+                except Exception as e:
+                    logger.warning(f"기존 디렉토리 삭제 실패: {e}")
             os.makedirs(self.third_party_dir, exist_ok=True)
             subprocess.run([
                 "git", "clone", "--depth", "1", 

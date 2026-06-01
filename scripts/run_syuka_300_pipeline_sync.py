@@ -17,6 +17,17 @@ sys.path.insert(0, PROJECT_ROOT)
 if os.path.basename(os.getcwd()) == "scripts":
     os.chdir(PROJECT_ROOT)
 
+# --- Deno (yt-dlp용 JavaScript 런타임) 경로 자동 등록 ---
+for deno_path in [
+    os.path.expanduser("~/.deno/bin"),
+    "/root/.deno/bin",
+    os.path.expanduser("~/.local/bin"),
+    "/usr/local/bin"
+]:
+    if os.path.exists(deno_path):
+        if deno_path not in os.environ.get("PATH", ""):
+            os.environ["PATH"] = deno_path + os.pathsep + os.environ.get("PATH", "")
+
 
 from src.backend.core.database import db_manager
 from src.utils import logger
