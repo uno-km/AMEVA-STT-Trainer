@@ -291,15 +291,26 @@ def run_training(resume_from_checkpoint: str = None, task_id: str = None):
     # 모델의 주요 어텐션 가중치층에 주입하여 저스펙 환경에서도 초고속 모델 개조가 일어날 수 있게 매핑
     model = apply_lora(model)
 
-    # ---- [5단계] 체크포인트 자동 검색 및 재개 설정 ----
+    # ---- [5단계] 체크포인트 재개 설정 ----
     # 훈련이 비정상 중단되었을 시, 저장된 폴더를 정밀 소팅하여 번호가 가장 높은 로컬 어댑터 가중치를 체크포인트로 채택
+    # (단, 외부 매개변수로 명시적 체크포인트 경로가 들어왔을 시 최우선 순위로 바인딩)
     resume_checkpoint = None
-    if os.path.exists(LORA_DIR):
+    if resume_from_checkpoint:
+        resume_checkpoint = resume_from_checkpoint
+        logger.info(f"[RESUME] 사용자 지정 체크포인트 경로를 사용하여 재개합니다: {resume_checkpoint}")
+    elif os.path.exists(LORA_DIR):
         ckpts = [d for d in os.listdir(LORA_DIR) if d.startswith("checkpoint-")]
         if ckpts:
             latest = sorted(ckpts, key=lambda x: int(x.split("-")[-1]))[-1]
             resume_checkpoint = os.path.join(LORA_DIR, latest)
             logger.info(f"[RESUME] 이전 학습 기록을 발견했습니다! {resume_checkpoint} 지점부터 이어서 진행합니다.")
+
+    # [가이드 반영] 체크포인트 재개 시 가중치 폭발 방지를 위해 학습률(learning_rate)을 기존 설정의 절반으로 조정
+    original_lr = CFG["learning_rate"]
+    current_lr = original_lr
+    if resume_checkpoint:
+        current_lr = original_lr * 0.5
+        logger.info(f"[RESUME] 재개 학습 보호막 작동: Learning Rate를 절반으로 낮춥니다. ({original_lr} -> {current_lr})")
 
     # ---- [6단계] 학습 파라미터(Seq2SeqTrainingArguments) 설정 ----
     # [각 아규먼트별 하드웨어 변수 맵핑 구조 정의]
@@ -307,11 +318,11 @@ def run_training(resume_from_checkpoint: str = None, task_id: str = None):
         output_dir                  = LORA_DIR,                       # 가중치 어댑터 결과 저장 폴더 (String)
         per_device_train_batch_size = CFG["batch_size"],              # 배치 당 연산 데이터 크기 (Integer)
         gradient_accumulation_steps = CFG["gradient_accumulation"],   # 메모리 부족 시 그라디언트를 누적하여 업데이터 수행 (Integer)
-        learning_rate               = CFG["learning_rate"],           # 옵티마이저 학습율 가중비율 (Float)
+        learning_rate               = current_lr,                     # 옵티마이저 학습율 가중비율 (Float)
         warmup_steps                = CFG["warmup_steps"],            # 초반 오버슈팅 방지를 위한 적응용 스텝수 (Integer)
         max_steps                   = CFG["max_steps"],               # 최대 총 훈련 반복 횟수 (Integer)
         gradient_checkpointing      = False,                          # 윈도우 CPU 환경에서 오류를 내는 기능이므로 비활성화 (Boolean)
-        fp16                        = False,                          # 16비트 부동소수점 미지원 하드웨어 대응용 비활성화 (Boolean)
+        fp16                        = torch.cuda.is_available(),      # [자동 감지] GPU 환경인 경우 16비트 가속 활성화, CPU인 경우 비활성화 (Boolean)
         bf16                        = False,                          # bfloat16 포맷 오작동 배제용 비활성화 (Boolean)
         eval_strategy               = "no",                           # 검증 비용 단 1초도 쓰지 않도록 평가 생략 (String)
         save_steps                  = CFG["save_steps"],              # 체크포인트 디렉터리 물리 저장 주기 (Integer)
@@ -324,6 +335,7 @@ def run_training(resume_from_checkpoint: str = None, task_id: str = None):
         remove_unused_columns       = False,                          # 메타 데이터 잃지 않기 위해 정밀 보존 (Boolean)
         push_to_hub                 = False,                          # 온라인 공유 업로드 비활성화 (Boolean)
         optim                       = "adamw_torch",                  # PyTorch 빌트인 AdamW 정밀 옵티마이저 활용 (String)
+        max_grad_norm               = 1.0,                            # [가이드 반영] CPU 환경에서 그라디언트 폭발을 강력 억제하는 클리핑 (Float)
     )
 
     # 오디오/텍스트 배치 가공을 위한 패딩 객체 및 실시간 훈련 통계를 수신해 DB/UI로 뿜어주는 콜백 생성
