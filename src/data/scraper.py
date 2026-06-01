@@ -55,8 +55,13 @@ def get_video_info_list(channel_url: str, count: int) -> List[Tuple[str, str, st
         "--playlist-items", f"1:{count}",      # 최신 count개만 가져오기
         "--flat-playlist",                     # 영상 내용은 다운로드하지 않고 목록만 수집
         "--no-warnings",
-        channel_url,
     ]
+    
+    cookie_path = os.path.abspath("cookies.txt")
+    if os.path.exists(cookie_path):
+        cmd.extend(["--cookies", cookie_path])
+        
+    cmd.append(channel_url)
     
     # [수정] 인코딩 오류 방지를 위해 바이트 단위로 캡처 후 수동 디코딩
     result = subprocess.run(cmd, capture_output=True, text=False)
@@ -147,6 +152,8 @@ def download_video_data(video_id: str, video_dir: str) -> Tuple[Optional[str], O
     vtt_path   = os.path.join(video_dir, f"{video_id}.ko.vtt")
     # 유튜브 영상 URL 조합
     url        = f"https://www.youtube.com/watch?v={video_id}"
+    
+    cookie_path = os.path.abspath("cookies.txt")
 
     # ----- 오디오: 이미 존재하면 스킵 -----
     if os.path.exists(audio_path) and os.path.getsize(audio_path) > 0:
@@ -161,6 +168,9 @@ def download_video_data(video_id: str, video_dir: str) -> Tuple[Optional[str], O
             "--postprocessor-args", f"ffmpeg:-ar {sr} -ac 1",
             "--no-playlist",
         ]
+        if os.path.exists(cookie_path):
+            audio_cmd.extend(["--cookies", cookie_path])
+
         # FFmpeg 경로가 감지되면 위치 추가
         if FFMPEG_BIN_DIR:
             audio_cmd.extend(["--ffmpeg-location", FFMPEG_BIN_DIR])
@@ -188,9 +198,14 @@ def download_video_data(video_id: str, video_dir: str) -> Tuple[Optional[str], O
             "--write-auto-subs", "--sub-format", "vtt", "--sub-langs", "ko",
             "--skip-download",   # 오디오는 위에서 이미 받았으므로 재다운 방지
             "--no-playlist",
+        ]
+        if os.path.exists(cookie_path):
+            vtt_cmd.extend(["--cookies", cookie_path])
+            
+        vtt_cmd.extend([
             "-o", os.path.join(video_dir, "%(id)s.%(ext)s"),
             url,
-        ]
+        ])
         # 자막 다운로드 실행
         res = subprocess.run(vtt_cmd, capture_output=True, text=False)
         # 파일이 생성되지 않았거나 0바이트이면 vtt_path 를 None 으로 표시
