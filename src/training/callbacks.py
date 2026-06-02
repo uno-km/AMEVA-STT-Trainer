@@ -14,6 +14,7 @@ class DashboardCallback(TrainerCallback):
         self.process = psutil.Process()
         self._last_time = time.time()
         self._last_step = 0
+        self._first_step_printed = False
         
     def on_step_end(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
         """매 학습 스텝이 끝날 때마다 호출되어 대시보드 진행률을 갱신합니다."""
@@ -21,6 +22,10 @@ class DashboardCallback(TrainerCallback):
             pct = (state.global_step / state.max_steps) * 100
             logger.update_progress(pct)
             logger.set_status(sub_task=f"Step: {state.global_step}/{state.max_steps} ({pct:.1f}%)")
+            
+            if not self._first_step_printed:
+                logger.info(f"✨ [RESUME CHECK] 재개 후 첫 스텝({state.global_step}) 진입 성공! 학습이 정상적으로 궤도에 올랐습니다.")
+                self._first_step_printed = True
 
     def on_log(self, args, state, control, logs=None, **kwargs):
         if logs is None: return

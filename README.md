@@ -169,6 +169,8 @@ for idx, row in clean_df.iterrows():
 
 ## 3. 시스템 아키텍처 설계 (Software Architecture Design)
 
+![AMEVA-STT-Trainer Architecture](img/architecture.png)
+
 본 시스템은 유지보수성과 확장성을 위해 **Layered Architecture** 패턴을 채택하여 모듈 간 의존성을 최소화하고, 실행 스크립트와 인프라 셋업 도구의 관심사를 완벽히 분리하였다.
 
 ### 3.1. 모듈별 설계 의도

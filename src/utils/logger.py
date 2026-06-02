@@ -99,25 +99,37 @@ def _write_to_db(level: str, message: str):
 def info(message: str):
     _write_to_db("INFO", message)
     if not state.is_dashboard_active:
-        console.print(f"[bold blue]INFO[/] {message}")
+        try:
+            console.print(f"[bold blue]INFO[/] {message}")
+        except OSError:
+            print(f"INFO {message}")
     elif "완료" in message or "생성" in message:
         set_status(sub_task=message)
 
 def error(message: str):
     _write_to_db("ERROR", message)
     if not state.is_dashboard_active:
-        console.print(f"[bold red]ERR [/] {message}")
+        try:
+            console.print(f"[bold red]ERR [/] {message}")
+        except OSError:
+            print(f"ERR {message}")
     notify_windows("⚠️ AMEVA-STT 오류", message[:100])
 
 def warning(message: str):
     _write_to_db("WARNING", message)
     if not state.is_dashboard_active:
-        console.print(f"[bold yellow]WARN[/] {message}")
+        try:
+            console.print(f"[bold yellow]WARN[/] {message}")
+        except OSError:
+            print(f"WARN {message}")
 
 def success(message: str):
     _write_to_db("SUCCESS", message)
     if not state.is_dashboard_active:
-        console.print(f"[bold green]OK  [/] {message}")
+        try:
+            console.print(f"[bold green]OK  [/] {message}")
+        except OSError:
+            print(f"OK {message}")
     notify_windows("✅ AMEVA-STT 완료", message[:100])
 
 def update_progress(pct: float):

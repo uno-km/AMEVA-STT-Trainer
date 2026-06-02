@@ -40,6 +40,18 @@ VideoInfo = Tuple[str, str, Optional[str], Optional[str]]
 #  영상 정보 수집                                                                #
 # ---------------------------------------------------------------------------- #
 
+def find_cookies_file() -> Optional[str]:
+    """cookies.txt 파일의 흔한 위치들을 뒤져서 실제 존재하는 절대경로를 반환합니다."""
+    for p in [
+        os.path.abspath("cookies.txt"),
+        "/content/cookies.txt",
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "cookies.txt"))
+    ]:
+        if os.path.exists(p):
+            return p
+    return None
+
+
 @exception_guard(location="get_video_info_list() -> yt-dlp 채널 조회", reraise=True)
 def get_video_info_list(channel_url: str, count: int) -> List[Tuple[str, str, str]]:
     """
@@ -58,8 +70,8 @@ def get_video_info_list(channel_url: str, count: int) -> List[Tuple[str, str, st
         "--extractor-args", "youtube:player_client=android,web"
     ]
     
-    cookie_path = os.path.abspath("cookies.txt")
-    if os.path.exists(cookie_path):
+    cookie_path = find_cookies_file()
+    if cookie_path:
         cmd.extend(["--cookies", cookie_path])
         
     cmd.append(channel_url)
@@ -154,7 +166,7 @@ def download_video_data(video_id: str, video_dir: str) -> Tuple[Optional[str], O
     # 유튜브 영상 URL 조합
     url        = f"https://www.youtube.com/watch?v={video_id}"
     
-    cookie_path = os.path.abspath("cookies.txt")
+    cookie_path = find_cookies_file()
 
     # ----- 오디오: 이미 존재하면 스킵 -----
     if os.path.exists(audio_path) and os.path.getsize(audio_path) > 0:
@@ -170,7 +182,7 @@ def download_video_data(video_id: str, video_dir: str) -> Tuple[Optional[str], O
             "--no-playlist",
             "--extractor-args", "youtube:player_client=android,web"
         ]
-        if os.path.exists(cookie_path):
+        if cookie_path:
             audio_cmd.extend(["--cookies", cookie_path])
 
         # FFmpeg 경로가 감지되면 위치 추가
@@ -202,7 +214,7 @@ def download_video_data(video_id: str, video_dir: str) -> Tuple[Optional[str], O
             "--no-playlist",
             "--extractor-args", "youtube:player_client=android,web"
         ]
-        if os.path.exists(cookie_path):
+        if cookie_path:
             vtt_cmd.extend(["--cookies", cookie_path])
             
         vtt_cmd.extend([
