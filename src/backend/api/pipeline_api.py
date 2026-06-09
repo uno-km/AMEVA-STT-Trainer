@@ -50,7 +50,7 @@ def scan_directory(base_path):
         return []
     
     def get_recursive_items(path, depth=0):
-        if depth > 3: return []
+        if depth > 10: return []
         items = []
         try:
             for entry in os.scandir(path):
@@ -207,7 +207,9 @@ def get_resources():
                 gpu_mem = f"{gpus[0].memoryUsed:.0f}/{gpus[0].memoryTotal:.0f} MB"
         except: pass
         
-        disk = psutil.disk_usage('/')
+        # Windows 환경 대응: 프로젝트 루트 기준으로 디스크 체크
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+        disk = psutil.disk_usage(project_root)
         disk_pct = disk.percent
         disk_used = disk.used / (1024**3)
         disk_total = disk.total / (1024**3)
@@ -267,3 +269,31 @@ def read_file_content(path: str):
                 return {"type": "text", "content": f.readlines()}
     except Exception as e:
         return {"error": str(e)}
+
+@router.get("/api/v1/files/search", dependencies=[Depends(verify_api_key)])
+def search_files(keyword: str, exts: Optional[str] = None):
+    import os
+    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+    search_dirs = [os.path.join(base_dir, d) for d in ("dataset","outputs","logs","configs","scripts") if os.path.isdir(os.path.join(base_dir, d))]
+    
+    ext_list = None
+    if exts:
+        ext_list = [e.strip() if e.strip().startswith(".") else f".{e.strip()}" for e in exts.split(",") if e.strip()]
+        
+    results = []
+    skip = {"chunks", "__pycache__", ".git", "venv"}
+    
+    for d in search_dirs:
+        for root, dirs, files in os.walk(d):
+            dirs[:] = [dir_name for dir_name in dirs if dir_name not in skip]
+            for f in files:
+                if ext_list and os.path.splitext(f)[1].lower() not in ext_list:
+                    continue
+                if keyword.lower() in f.lower():
+                    filepath = os.path.join(root, f)
+                    try:
+                        size = os.path.getsize(filepath)
+                        results.append({"name": f, "path": filepath, "size": size, "dir": root})
+                    except: pass
+                    
+    return {"results": results[:100]} # 최대 100개 제한

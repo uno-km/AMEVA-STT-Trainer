@@ -9,7 +9,10 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-from src.backend.api.pipeline_api import router as pipeline_router
+from src.backend.api.routers.tasks import router as task_router, pipeline_router
+from src.backend.api.routers.files import router as file_router
+from src.backend.api.routers.system import router as system_router
+from src.backend.api.routers.database import router as db_router
 
 app = FastAPI(
     title="AMEVA-STT-Trainer Headless API",
@@ -27,6 +30,10 @@ app.add_middleware(
 )
 
 app.include_router(pipeline_router)
+app.include_router(task_router)
+app.include_router(file_router)
+app.include_router(system_router)
+app.include_router(db_router)
 
 @app.get("/")
 def root():
