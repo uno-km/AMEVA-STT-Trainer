@@ -8,6 +8,9 @@ import os
 # 프로젝트 루트를 PATH에 추가
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+# Hugging Face 모델 캐시 디렉토리를 외부 공통 폴더로 지정
+os.environ["HF_HOME"] = r"C:\ameva\models\stt"
+
 def download_model(model_id: str):
     print(f"\n[정보] {model_id} 모델 다운로드/확인 시작...")
     try:

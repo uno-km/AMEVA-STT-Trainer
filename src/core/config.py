@@ -15,6 +15,9 @@ import yaml
 # 프로젝트 루트 (이 파일 기준 2단계 상위)
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
+# Hugging Face 모델 캐시 디렉토리를 외부 공통 폴더로 지정
+os.environ["HF_HOME"] = r"C:\ameva\models\stt"
+
 # --- Dynamic Task-Specific Paths ---
 ACTIVE_TASK_ID = os.environ.get("CURRENT_TASK_ID")
 DATASET_DIR     = os.path.join(ROOT_DIR, "dataset")
