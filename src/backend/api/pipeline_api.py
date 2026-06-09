@@ -4,6 +4,7 @@ import json
 from fastapi import APIRouter, Depends, HTTPException, Header
 from pydantic import BaseModel
 from typing import Dict, Any, Optional, List
+import sqlite3
 
 from src.backend.core.task_manager import task_manager
 
@@ -192,14 +193,77 @@ def get_files_explorer():
 def get_resources():
     import psutil
     try:
-        cpu = psutil.cpu_percent()
+        cpu = psutil.cpu_percent(interval=0.1)
         ram = psutil.virtual_memory().percent
+        ram_used = psutil.virtual_memory().used / (1024 ** 3)
+        ram_total = psutil.virtual_memory().total / (1024 ** 3)
         gpu = 0
+        gpu_mem = "N/A"
         try:
             import GPUtil
             gpus = GPUtil.getGPUs()
-            if gpus: gpu = gpus[0].load * 100
+            if gpus: 
+                gpu = gpus[0].load * 100
+                gpu_mem = f"{gpus[0].memoryUsed:.0f}/{gpus[0].memoryTotal:.0f} MB"
         except: pass
-        return {"cpu": cpu, "ram": ram, "gpu": gpu}
-    except:
-        return {"cpu": 0, "ram": 0, "gpu": 0}
+        
+        disk = psutil.disk_usage('/')
+        disk_pct = disk.percent
+        disk_used = disk.used / (1024**3)
+        disk_total = disk.total / (1024**3)
+        
+        procs = []
+        for p in sorted([p.info for p in psutil.process_iter(['pid','name','cpu_percent','memory_info'])], key=lambda p: p.get('cpu_percent') or 0, reverse=True)[:5]:
+            mem_mb = (p.get('memory_info').rss / (1024**2)) if p.get('memory_info') else 0
+            procs.append({
+                "pid": p.get('pid', ''),
+                "name": p.get('name', '')[:25],
+                "cpu": f"{p.get('cpu_percent', 0):.1f}",
+                "mem": f"{mem_mb:.1f} MB"
+            })
+            
+        return {
+            "cpu": cpu, "ram": ram, "gpu": gpu, "gpu_mem": gpu_mem,
+            "ram_used": ram_used, "ram_total": ram_total,
+            "disk_pct": disk_pct, "disk_used": disk_used, "disk_total": disk_total,
+            "processes": procs
+        }
+    except Exception as e:
+        return {"error": str(e), "cpu": 0, "ram": 0, "gpu": 0}
+
+class SqlQueryRequest(BaseModel):
+    sql: str
+    params: List[Any] = []
+
+@router.post("/api/v1/db/query", dependencies=[Depends(verify_api_key)])
+def run_db_query(req: SqlQueryRequest):
+    if not req.sql.strip().lower().startswith("select") and not req.sql.strip().lower().startswith("pragma"):
+        return {"error": "Only SELECT or PRAGMA queries are allowed."}
+    try:
+        from src.backend.core.database import db_manager
+        with db_manager.get_connection() as conn:
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+            cur.execute(req.sql, req.params)
+            rows = cur.fetchall()
+            if not rows: return {"columns": [], "rows": []}
+            cols = list(rows[0].keys())
+            return {"columns": cols, "rows": [list(r) for r in rows]}
+    except Exception as e:
+        return {"error": str(e)}
+
+@router.get("/api/v1/files/read", dependencies=[Depends(verify_api_key)])
+def read_file_content(path: str):
+    import os
+    if not os.path.exists(path):
+        return {"error": "File not found"}
+    try:
+        if path.endswith(".csv"):
+            import csv
+            with open(path, newline='', encoding='utf-8', errors='replace') as f:
+                return {"type": "csv", "content": list(csv.reader(f))}
+        else:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                return {"type": "text", "content": f.readlines()}
+    except Exception as e:
+        return {"error": str(e)}

@@ -35,8 +35,7 @@ def _make_bar(pct: float, width: int = 30, color: str = "green") -> str:
 
 def show_system_status():
     console.clear()
-
-    import psutil
+    from cli.client.api_client import api_client
 
     cpu_hist, ram_hist, gpu_hist = [], [], []
 
@@ -45,21 +44,25 @@ def show_system_status():
     try:
         with Live(console=console, refresh_per_second=2, screen=False) as live:
             for _ in range(120):  # 최대 2분
-                cpu = psutil.cpu_percent(interval=None)
-                ram = psutil.virtual_memory().percent
-                ram_used = psutil.virtual_memory().used / (1024 ** 3)
-                ram_total = psutil.virtual_memory().total / (1024 ** 3)
-
-                gpu = 0.0
-                gpu_mem = "N/A"
-                try:
-                    import GPUtil
-                    gpus = GPUtil.getGPUs()
-                    if gpus:
-                        gpu = gpus[0].load * 100
-                        gpu_mem = f"{gpus[0].memoryUsed:.0f}/{gpus[0].memoryTotal:.0f} MB"
-                except:
-                    pass
+                res = api_client.get("/api/v1/system/resources")
+                if "error" in res and res["error"]:
+                    cpu = ram = gpu = 0
+                    ram_used = ram_total = disk_pct = disk_used = disk_total = 0
+                    gpu_mem = "N/A"
+                    procs = []
+                    disk_str = "N/A"
+                else:
+                    cpu = res.get('cpu', 0)
+                    ram = res.get('ram', 0)
+                    gpu = res.get('gpu', 0)
+                    gpu_mem = res.get('gpu_mem', 'N/A')
+                    ram_used = res.get('ram_used', 0)
+                    ram_total = res.get('ram_total', 0)
+                    disk_pct = res.get('disk_pct', 0)
+                    disk_used = res.get('disk_used', 0)
+                    disk_total = res.get('disk_total', 0)
+                    procs = res.get('processes', [])
+                    disk_str = f"[dim]{disk_used:.1f}/{disk_total:.1f} GB[/dim]  {_make_bar(disk_pct, 20, 'blue')}"
 
                 cpu_hist.append(cpu)
                 ram_hist.append(ram)
@@ -74,31 +77,9 @@ def show_system_status():
                 proc_table.add_column("프로세스명", style="cyan")
                 proc_table.add_column("CPU%", justify="right", style="red", width=7)
                 proc_table.add_column("메모리", justify="right", style="yellow", width=10)
-                try:
-                    procs = sorted(
-                        [p.info for p in psutil.process_iter(['pid','name','cpu_percent','memory_info'])],
-                        key=lambda p: p.get('cpu_percent') or 0, reverse=True
-                    )[:8]
-                    for p in procs:
-                        mem_mb = (p.get('memory_info').rss / (1024**2)) if p.get('memory_info') else 0
-                        proc_table.add_row(
-                            str(p.get('pid','')),
-                            (p.get('name') or '')[:25],
-                            f"{p.get('cpu_percent',0):.1f}",
-                            f"{mem_mb:.1f} MB"
-                        )
-                except:
-                    pass
-
-                # 디스크
-                try:
-                    disk = psutil.disk_usage(project_root)
-                    disk_pct = disk.percent
-                    disk_used = disk.used / (1024**3)
-                    disk_total = disk.total / (1024**3)
-                    disk_str = f"[dim]{disk_used:.1f}/{disk_total:.1f} GB[/dim]  {_make_bar(disk_pct, 20, 'blue')}"
-                except:
-                    disk_str = "N/A"
+                
+                for p in procs:
+                    proc_table.add_row(str(p.get('pid')), p.get('name'), p.get('cpu'), p.get('mem'))
 
                 grid = Table.grid(expand=True)
                 grid.add_row(Panel(
