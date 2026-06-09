@@ -185,9 +185,11 @@ class TaskManager:
                     
                     # 종료 상태 DB 반영 및 순수 DB 기반 Auto-Chaining
                     from src.backend.core.database import db_manager
+                    from src.backend.core.webhook import webhook_manager
                     
                     if process.returncode == 0:
                         db_manager.update_task_status(task_id, level, "SUCCESS", f"Exit Code: 0")
+                        webhook_manager.send_notification(task_id, level, "SUCCESS", f"Step {level} completed successfully.")
                         
                         # DB의 tb_task_dtl(next_step)을 조회하여 연쇄 가동 실행
                         self.trigger_next_step(task_id)
@@ -199,6 +201,8 @@ class TaskManager:
                             ckpt_name = os.path.basename(checkpoint)
                             db_manager.insert_checkpoint(task_id, checkpoint, ckpt_name, step_level=level)
                         db_manager.update_task_status(task_id, level, "FAILED", f"Exit Code: {process.returncode}", checkpoint_path=checkpoint)
+                        webhook_manager.send_notification(task_id, level, "FAILED", f"Process exited with code {process.returncode}")
+                        
                         if checkpoint:
                             f.write(f"\n--- [AMEVA Engine] 치명적 오류. 최신 체크포인트 보존됨: {checkpoint} ---\n")
                         else:
@@ -210,11 +214,13 @@ class TaskManager:
                     f.write(f"\n[FATAL ERROR] 서브프로세스 기동 중 치명적 오류: {str(e)}\n")
                     f.write(f"상세 정보: {traceback.format_exc()}\n")
                 from src.backend.core.database import db_manager
+                from src.backend.core.webhook import webhook_manager
                 checkpoint = self._find_latest_checkpoint(task_id) if level == 2 else None
                 if checkpoint:
                     ckpt_name = os.path.basename(checkpoint)
                     db_manager.insert_checkpoint(task_id, checkpoint, ckpt_name, step_level=level)
                 db_manager.update_task_status(task_id, level, "FAILED", f"Error: {str(e)}", checkpoint_path=checkpoint)
+                webhook_manager.send_notification(task_id, level, "FAILED", f"Execution error: {str(e)[:100]}")
             finally:
                 if task_id in self.active_processes:
                     del self.active_processes[task_id]

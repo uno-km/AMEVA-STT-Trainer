@@ -38,5 +38,9 @@ sentencepiece
 numpy
 gguf
 
-# MLOps High-Fidelity Word Reporting & Charts
+# CLI Client Dependencies
+requests
+plotext
+
+# MLOps High-Fidelity Word Reporting
 python-docx

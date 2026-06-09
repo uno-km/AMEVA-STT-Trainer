@@ -37,9 +37,9 @@ sentencepiece
 numpy
 gguf
 
-# UI Architecture Facade
-PyQt6
-
-# MLOps High-Fidelity Word Reporting & Charts
+# API Server & Headless Dependencies
+fastapi
+uvicorn
+requests
+plotext
 python-docx
-matplotlib

@@ -1,8 +1,22 @@
 import os
 import glob
 import json
-from src.backend.core.pseudo_router import router
+from fastapi import APIRouter, Depends, HTTPException, Header
+from pydantic import BaseModel
+from typing import Dict, Any, Optional, List
+
 from src.backend.core.task_manager import task_manager
+
+router = APIRouter()
+
+# 보안 설정 기반 (API Key)
+# 향후 환경 변수 AMEVA_API_KEY 설정 시, X-API-Key 헤더로 인증 수행
+AMEVA_API_KEY = os.environ.get("AMEVA_API_KEY", "")
+
+def verify_api_key(x_api_key: Optional[str] = Header(None)):
+    if AMEVA_API_KEY and x_api_key != AMEVA_API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid API Key")
+    return True
 
 class PipelineState:
     def __init__(self):
@@ -11,56 +25,41 @@ class PipelineState:
         
     def add_log(self, level, message):
         from src.backend.core.database import db_manager
-        # task_id가 현재 잡혀있으면 태스크 종속 로그로, 아니면 통합 로그로 저장
         tid = self.current_task_name if self.current_task_name != "AMEVA STT Engine" else None
         db_manager.add_log(level, message, tid)
 
 pipeline_state = PipelineState()
+pipeline_state.add_log("INFO", "Initializing AMEVA-STT-Trainer Pipeline with FastAPI...")
 
-# Mock initial logs (now inserts into DB if not exists)
-pipeline_state.add_log("INFO", "Initializing AMEVA-STT-Trainer Pipeline with SQLite DB...")
 
-@router.get("/api/v1/pipeline/status")
+@router.get("/api/v1/pipeline/status", dependencies=[Depends(verify_api_key)])
 def get_pipeline_status():
     return {
         "task_name": pipeline_state.current_task_name,
         "stage": pipeline_state.current_stage
     }
 
-@router.get("/api/v1/pipeline/logs")
+@router.get("/api/v1/pipeline/logs", dependencies=[Depends(verify_api_key)])
 def get_pipeline_logs():
     from src.backend.core.database import db_manager
-    # 현재 상태에 상관없이 통합 로그 전체를 가져옵니다. 
-    # (원한다면 현재 task_id로만 가져올 수도 있습니다)
     return {"logs": db_manager.get_logs(limit=100)}
 
 def scan_directory(base_path):
-    """지정된 경로의 모든 하위 파일 목록을 재귀적으로 반환합니다. (안전 깊이 제한 및 chunks 폴더 스킵 적용)"""
     if not os.path.exists(base_path):
         return []
     
     def get_recursive_items(path, depth=0):
-        if depth > 3: # 안전 마진: 너무 깊은 재귀 차단
-            return []
+        if depth > 3: return []
         items = []
         try:
             for entry in os.scandir(path):
-                # chunks 폴더는 내부의 수천개 .wav 스캔을 건너뛰어 속도 저하 방지
                 if entry.name == "chunks" and entry.is_dir():
                     items.append({
-                        "name": entry.name,
-                        "is_dir": True,
-                        "path": entry.path,
-                        "size": 0,
-                        "children": [] # 하위 파일 목록은 비워둠
+                        "name": entry.name, "is_dir": True, "path": entry.path, "size": 0, "children": []
                     })
                     continue
-                
                 item = {
-                    "name": entry.name,
-                    "is_dir": entry.is_dir(),
-                    "path": entry.path,
-                    "size": entry.stat().st_size if entry.is_file() else 0
+                    "name": entry.name, "is_dir": entry.is_dir(), "path": entry.path, "size": entry.stat().st_size if entry.is_file() else 0
                 }
                 if entry.is_dir():
                     item["children"] = get_recursive_items(entry.path, depth + 1)
@@ -68,18 +67,16 @@ def scan_directory(base_path):
         except Exception:
             pass
         return items
-
     return get_recursive_items(base_path)
 
-@router.get("/api/v1/pipeline/records")
+@router.get("/api/v1/pipeline/records", dependencies=[Depends(verify_api_key)])
 def get_past_records():
-    # 현재 파일 위치(src/backend/api/pipeline_api.py) 기준 3단계 상위 폴더를 루트로 동적 계산
     base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
     outputs_dir = os.path.join(base_dir, "outputs")
     return {"records": scan_directory(outputs_dir)}
 
-@router.get("/api/v1/tasks/logs")
-def get_logs(task_id: str = None):
+@router.get("/api/v1/tasks/logs", dependencies=[Depends(verify_api_key)])
+def get_logs(task_id: Optional[str] = None):
     if not task_id:
         return {"logs": "선택된 태스크가 없습니다."}
     try:
@@ -99,61 +96,66 @@ def get_logs(task_id: str = None):
     except Exception as e:
         return {"logs": f"로그 로드 실패: {str(e)}"}
 
-@router.get("/api/v1/tasks/list")
+@router.get("/api/v1/tasks/list", dependencies=[Depends(verify_api_key)])
 def list_tasks():
     from src.backend.core.database import db_manager
     return {"tasks": db_manager.get_all_tasks()}
 
-@router.post("/api/v1/tasks/init_data")
-def init_data(body: dict):
-    name = body.get("name", "New Task")
-    step_limit = body.get("step_limit", 1)
-    step1_params = body.get("step1_params", {})
-    step2_params = body.get("step2_params", {})
-    step3_params = body.get("step3_params", {})
-    
-    res = task_manager.init_data(name, step_limit, step1_params, step2_params, step3_params)
+class InitDataRequest(BaseModel):
+    name: str = "New Task"
+    step_limit: int = 1
+    step1_params: Dict[str, Any] = {}
+    step2_params: Dict[str, Any] = {}
+    step3_params: Dict[str, Any] = {}
+
+@router.post("/api/v1/tasks/init_data", dependencies=[Depends(verify_api_key)])
+def init_data(req: InitDataRequest):
+    res = task_manager.init_data(req.name, req.step_limit, req.step1_params, req.step2_params, req.step3_params)
+    pipeline_state.current_task_name = res["id"]
     return res
 
-@router.post("/api/v1/tasks/start_train")
-def start_train(body: dict):
-    task_id = body.get("task_id")
-    step_limit = body.get("step_limit", 2)
-    step2_params = body.get("step2_params", {})
-    step3_params = body.get("step3_params", {})
-    
-    return task_manager.start_train(task_id, step_limit, step2_params, step3_params)
+class StartTrainRequest(BaseModel):
+    task_id: str
+    step_limit: int = 2
+    step2_params: Dict[str, Any] = {}
+    step3_params: Dict[str, Any] = {}
 
-@router.post("/api/v1/tasks/stop")
-def stop_task(body: dict):
-    task_id = body.get("task_id")
-    if task_id:
-        return task_manager.force_stop_task(task_id)
-    return {"status": "Error", "message": "No task_id provided"}
+@router.post("/api/v1/tasks/start_train", dependencies=[Depends(verify_api_key)])
+def start_train(req: StartTrainRequest):
+    pipeline_state.current_task_name = req.task_id
+    return task_manager.start_train(req.task_id, req.step_limit, req.step2_params, req.step3_params)
 
-@router.post("/api/v1/tasks/restart")
-def restart_task(body: dict):
+class StopTaskRequest(BaseModel):
+    task_id: str
+
+@router.post("/api/v1/tasks/stop", dependencies=[Depends(verify_api_key)])
+def stop_task(req: StopTaskRequest):
+    if req.task_id:
+        return task_manager.force_stop_task(req.task_id)
+    raise HTTPException(status_code=400, detail="No task_id provided")
+
+class RestartTaskRequest(BaseModel):
+    task_id: str
+
+@router.post("/api/v1/tasks/restart", dependencies=[Depends(verify_api_key)])
+def restart_task(req: RestartTaskRequest):
     from src.backend.core.database import db_manager
-    base_task_id = body.get("task_id")
-    if not base_task_id: return {"error": "Missing base_task_id"}
+    if not req.task_id: raise HTTPException(status_code=400, detail="Missing task_id")
     
-    # 새 버전 태스크 생성 (예: 2_태스크명)
-    new_task_id = db_manager.create_next_version_task(base_task_id)
+    new_task_id = db_manager.create_next_version_task(req.task_id)
     task_info = db_manager.get_task_details(new_task_id)
-    
-    db_manager.update_task_status(new_task_id, 1, "RUNNING", f"Restarted from {base_task_id}")
+    db_manager.update_task_status(new_task_id, 1, "RUNNING", f"Restarted from {req.task_id}")
     pipeline_state.current_task_name = new_task_id
     return {"id": new_task_id, "name": task_info['tsk_nm']}
 
-@router.get("/api/v1/tasks/metrics")
-def get_task_metrics(task_id: str = None):
-    """지정된 태스크의 실시간 DB 메트릭을 반환합니다."""
+@router.get("/api/v1/tasks/metrics", dependencies=[Depends(verify_api_key)])
+def get_task_metrics(task_id: Optional[str] = None):
     from src.backend.core.database import db_manager
     if not task_id: return {"metrics": []}
     return {"metrics": db_manager.get_metrics(task_id)}
 
-@router.get("/api/v1/tasks/report")
-def get_task_report(task_id: str = None):
+@router.get("/api/v1/tasks/report", dependencies=[Depends(verify_api_key)])
+def get_task_report(task_id: Optional[str] = None):
     from src.backend.core.database import db_manager
     from src.backend.core.reporter import report_generator
     
@@ -161,16 +163,14 @@ def get_task_report(task_id: str = None):
     task_details = db_manager.get_task_details(tid)
     
     if not task_details: 
-        return {"error": "Task not found"}
+        raise HTTPException(status_code=404, detail="Task not found")
     
-    # 워드 리포트 생성
     report_path = None
     try:
         report_path = report_generator.generate_task_report(tid)
     except Exception as e:
         print(f"Failed to generate Word report: {e}")
     
-    # 보고서 구조 생성
     report = {
         "task_info": task_details,
         "logs": db_manager.get_logs(task_id=tid, limit=1000),
@@ -178,31 +178,28 @@ def get_task_report(task_id: str = None):
     }
     return report
 
-@router.get("/api/v1/files/explorer")
+@router.get("/api/v1/files/explorer", dependencies=[Depends(verify_api_key)])
 def get_files_explorer():
-    # 현재 파일 위치(src/backend/api/pipeline_api.py) 기준 3단계 상위 폴더를 루트로 동적 계산
     base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-    
     return {
         "dataset": scan_directory(os.path.join(base_dir, "dataset")),
         "logs": scan_directory(os.path.join(base_dir, "logs")),
         "outputs": scan_directory(os.path.join(base_dir, "outputs")),
         "configs": scan_directory(os.path.join(base_dir, "configs"))
     }
-@router.get("/api/v1/system/resources")
+
+@router.get("/api/v1/system/resources", dependencies=[Depends(verify_api_key)])
 def get_resources():
     import psutil
     try:
         cpu = psutil.cpu_percent()
         ram = psutil.virtual_memory().percent
-        # GPU는 옵션 (없을 경우 0)
         gpu = 0
         try:
             import GPUtil
             gpus = GPUtil.getGPUs()
             if gpus: gpu = gpus[0].load * 100
         except: pass
-        
         return {"cpu": cpu, "ram": ram, "gpu": gpu}
     except:
         return {"cpu": 0, "ram": 0, "gpu": 0}

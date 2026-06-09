@@ -7,8 +7,9 @@ from src.utils import logger
 
 # TrainerCallback 을 상속받아 학습 이벤트를 가로채는 커스텀 콜백 클래스
 class DashboardCallback(TrainerCallback):
-    def __init__(self, task_id=None):
+    def __init__(self, task_id=None, stop_io_event=None):
         self.task_id = task_id
+        self.stop_io_event = stop_io_event
         import psutil
         import time
         self.process = psutil.Process()
@@ -18,6 +19,9 @@ class DashboardCallback(TrainerCallback):
         
     def on_step_end(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
         """매 학습 스텝이 끝날 때마다 호출되어 대시보드 진행률을 갱신합니다."""
+        if self.stop_io_event and not self.stop_io_event.is_set():
+            self.stop_io_event.set()
+            
         if state.max_steps > 0:
             pct = (state.global_step / state.max_steps) * 100
             logger.update_progress(pct)
