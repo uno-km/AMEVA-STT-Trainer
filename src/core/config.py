@@ -54,7 +54,7 @@ resolve_paths()
 LOG_DIR         = os.path.join(ROOT_DIR, "logs")
 
 # GGUF 모델 저장 경로 (외부 공통 저장소 혹은 프로젝트 내부 fallback)
-GGUF_DIR_PRIMARY = r"C:\ameva\AI_Models\ggml"
+GGUF_DIR_PRIMARY = r"C:\ameva\models\stt"
 if os.path.exists(GGUF_DIR_PRIMARY):
     GGUF_DIR = GGUF_DIR_PRIMARY
 else:

@@ -1,6 +1,6 @@
 """
 scripts/download_model.py
-[선택] whisper-tiny GGUF 파일을 C:\\ameva\\AI_Models\\ggml\\ 에 다운로드한다.
+[선택] whisper-tiny GGUF 파일을 C:\ameva\models\stt\ 에 다운로드한다.
 학습 전 추론 기준선 테스트를 위해 사용한다.
 """
 import sys

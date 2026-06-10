@@ -1,6 +1,6 @@
 """
 src/models/downloader.py
-Whisper 모델을 C:\\ameva\\AI_Models\\ggml\\ 에 다운로드한다.
+Whisper 모델을 C:\ameva\models\stt\ 에 다운로드한다.
 
 - HuggingFace Hub에서 GGUF 파일 직접 다운로드
 - 이미 존재하면 스킵 (용량 낭비 방지)

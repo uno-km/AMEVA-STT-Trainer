@@ -5,7 +5,7 @@ scripts/03_export_model.py
 실행 순서:
   1. LoRA 어댑터를 베이스 모델에 병합 -> outputs/merged_model/ 저장
   2. GGUF 변환 절차 출력 (whisper.cpp 빌드 환경 필요)
-  3. 변환된 GGUF를 C:\\ameva\\AI_Models\\ggml\\ 에 복사하는 명령 안내
+  3. 변환된 GGUF를 C:\ameva\models\stt\created 에 복사하는 명령 안내
 """
 import sys
 import os
