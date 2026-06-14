@@ -1,3 +1,5 @@
+#  AMEVA-STT-Trainer: Domain-Specific Whisper Fine-tuning Pipeline
+
 > **[프로젝트 요약 (Resume Profile)]**
 > 
 > * **① 제목:** Windows CPU 최적화 Whisper LoRA 파인튜닝 플랫폼 (AMEVA STT Trainer)
@@ -13,16 +15,21 @@
 >   * **연구 성과:** 스트리밍 학습 모델 및 pin_memory 해제 설정을 구현하여 윈도우 CPU 단독 환경에서도 OOM 크래시나 매개변수 오류(`WinError 87`) 없이 LoRA 학습의 무한 가용성을 입증하고, LoRA 병합-GGUF 변환 연계를 통한 추론 속도 극대화
 > * **④ 기여도:** 단독 개발 (100% - 아키텍처 설계, 보안 시스템 구축, 코어 로직 구현 전담)
 
-# 📊 AMEVA-STT-Trainer: Domain-Specific Whisper Fine-tuning Pipeline
+#  AMEVA-STT-Trainer: Domain-Specific Whisper Fine-tuning Pipeline
 
-## 1. 개요 (Abstract)
+---
+
+---
+
+## 3. 개요 (Abstract)
+
 본 프로젝트는 특정 도메인(경제/시사 콘텐츠)에 특화된 음성 인식(STT) 모델을 구축하기 위한 엔드투엔드 파이프라인이다. OpenAI의 Whisper 모델을 기반으로 하며, 데이터 수집의 자동화, 병렬 전처리 알고리즘, PEFT(LoRA)를 활용한 효율적 파인튜닝, 그리고 GGUF 포맷을 통한 최적화된 배포 과정을 포함한다. 
 
 특히 Windows/Linux/macOS 환경 모두를 아우르는 **단일 통합 환경 구축 인터페이스(`setup.py` & `setup/` 격리)**, 품질 투명성과 감사 추적성을 극대화한 **다차원 설명성 검수 파이프라인(Explainability & Quality Audit)**, 그리고 **Whisper.cpp 연동 및 모델 양자화(Quantization)**를 패키징하여 최고 수준의 MLOps 신뢰성과 하드웨어 가용성을 확보하였다.
 
 ---
 
-## 2. 주요 기술적 특징 (Technical Deep-Dive)
+## 4. 주요 기술적 특징 (Technical Deep-Dive)
 
 ### 2.1. 데이터 획득 및 전처리 알고리즘 (Data Engineering & Signal Processing)
 본 파이프라인은 비정형 스트리밍 데이터로부터 고품질 학습 코퍼스를 추출하기 위해 고도의 시그널 프로세싱 및 정교한 텍스트 가공 체계를 통합 구축하였다.
@@ -44,6 +51,7 @@
 - **Windows Optimized I/O (Streaming)**: Windows 환경에서의 대규모 오디오 로딩으로 인한 `WinError 87` (메모리 맵핑 한계) 에러를 원천 방지하기 위해 **IterableDataset** 방식을 도입하여 데이터 로딩 버퍼와 학습 파이프라인의 메모리 점유율을 실시간으로 수평 고정(Flatly Controlled)한다.
 
 ### 2.2. 모델 아키텍처 및 학습 전략 (Fine-Tuning Methodology)
+
 본 프로젝트는 OpenAI의 **Whisper** 모델(Transformer 기반 Encoder-Decoder 구조)을 베이스로 하며, 효율적인 도메인 적응을 위해 PEFT 전략을 채택하였다.
 - **LoRA (Low-Rank Adaptation) Theory**: 모델의 전체 파라미터 $W \in \mathbb{R}^{d \times k}$를 고정한 채, 저차원 행렬 $A$와 $B$의 곱으로 표현되는 업데이트 행렬 $\Delta W$만을 학습시킨다. 이는 다음과 같은 가중치 업데이트 식을 따른다:
   $$ W_{updated} = W_0 + \Delta W = W_0 + BA \quad (\text{where } B \in \mathbb{R}^{d \times r}, A \in \mathbb{R}^{r \times k}, r \ll d, k) $$
@@ -68,6 +76,7 @@
 - **Loss Function**: 자동 음성 인식을 위해 Cross-Entropy Loss를 기반으로 하는 Sequence-to-Sequence 학습을 수행하며, Label Smoothing 기술을 적용하여 모델의 일반화 성능을 향상시켰다.
 
 ### 2.3. 양자화 및 배포 최적화 (Inference Optimization & Quantization)
+
 학습된 LoRA 가중치는 베이스 모델과 병합(Merge)된 후, 최종적으로 `llama.cpp` 에코시스템과 호환되는 **GGUF** 포맷으로 변환되어 초고속 로컬 추론을 실현한다.
 - **Cross-Platform Building**: 통합 실행기(`setup.py`) 구동 시, Windows는 동봉된 precompiled 양자화 유틸리티(`quantize.exe`, DLL 패키지)의 무결성을 검증하고, Linux/macOS(Darwin)는 로컬 아키텍처를 자동 진단하여 **Apple Silicon Metal 가속** 또는 **Linux OpenMP** 기반으로 `quantize` C++ 바이너리를 자동 즉시 컴파일(make)한다.
 - **Quantization Logic (K-Quants)**: 부동 소수점(FP16/FP32) 가중치를 4-bit 혹은 8-bit 정수형으로 압축하는 양자화를 수행한다. 이때 Perplexity 손실을 최소화하기 위해 가중치 블록 단위로 스케일을 조정하는 비대칭 양자화(Asymmetric Quantization) 기법을 사용한다.
@@ -121,6 +130,7 @@ def get_new_only(old_text: str, new_text: str) -> str:
 ```
 
 #### 2.4.2. 문장 경계 감지 동적 청킹 알고리즘 (Boundary-Aware Dynamic Chunking)
+
 * **물리적 소스코드 주소**: [src/data/processor.py:L207-L233](file:///c:/ameva/AMEVA-STT-Trainer/src/data/processor.py#L207-L233)
 * **설계 목적**: 발화 맥락이 임의의 30초 임계 시점에서 끊어지는 참사를 방지하고, 한국어 종결어미 형태소 및 무음 단락 가이드를 종합 분석해 인코더 경계를 동적 수호한다.
 
@@ -147,6 +157,7 @@ should_flush = (
 ```
 
 #### 2.4.3. 구어체 연속 반복 및 중복 데이터 감사 (Adjacent Repetition & Row Duplication Audit)
+
 * **물리적 소스코드 주소**: [src/data/validator.py:L150-L195](file:///c:/ameva/AMEVA-STT-Trainer/src/data/validator.py#L150-L195)
 * **설계 목적**: 물리 데이터셋의 단순 로우 레벨 1:1 중복 검출 및 세그먼트 단어군 내부의 말더듬(Adjacent 1~3 gram repetition) 구어체 특성을 수식 분석해 데이터 다양성을 강제 진단한다.
 
@@ -182,13 +193,14 @@ for idx, row in clean_df.iterrows():
 
 ---
 
-## 3. 시스템 아키텍처 설계 (Software Architecture Design)
+## 5. 시스템 아키텍처 설계 (Software Architecture Design)
 
 ![AMEVA-STT-Trainer Architecture](img/architecture.png)
 
 본 시스템은 유지보수성과 확장성을 위해 **Layered Architecture** 패턴을 채택하여 모듈 간 의존성을 최소화하고, 실행 스크립트와 인프라 셋업 도구의 관심사를 완벽히 분리하였다.
 
 ### 3.1. 모듈별 설계 의도
+
 - **`src/core/` (Core Layer)**: 설정 관리(Config) 및 전역 예외 처리를 담당한다. 
   
   ```python
@@ -234,6 +246,7 @@ for idx, row in clean_df.iterrows():
   ```
 
 ### 3.2. 디렉토리 구조 (Repository Layout)
+
 ```text
 AMEVA-STT-Trainer/
 ├── setup.py            # [Root] 단일 통합 크로스플랫폼 셋업 진입점 (OS 자동 라우터)
@@ -259,7 +272,7 @@ AMEVA-STT-Trainer/
 
 ---
 
-## 4. 데이터 무결성 및 설명성 감사 체계 (Explainability & Quality Audit)
+## 6. 데이터 무결성 및 설명성 감사 체계 (Explainability & Quality Audit)
 
 실무 MLOps 및 엔터프라이즈 데이터 엔지니어링 환경에서는 전처리 단계에서 유입되는 데이터 노이즈의 필터링 결과와 은밀한 시간 보정 이벤트를 블랙박스로 다루는 것이 허용되지 않는다. 본 파이프라인은 `src/data/processor.py` 및 `src/data/validator.py` 모듈을 중심으로 가동되는 실시간 전처리 계측 및 사후 3단계 다차원 정밀 감사 구조를 도입하여 데이터 투명성과 설명 추적성(Auditable Transparency)을 극대화하였다.
 
@@ -287,6 +300,7 @@ graph TD
 ```
 
 ### 4.1. 3단계 무결성 검증 프로토콜 (Integrity Protocols)
+
 1. **물리적 무결성 스캔 (Physical Integrity Scan)**:
    - 디렉토리 내에 슬라이싱 생성된 모든 WAV 파일의 오디오 헤더 블록을 전수 파싱하여 RIFF 포맷 무결성을 확인한다.
    - 오디오 파일이 손상되었거나 인코딩 오류, 혹은 파일 전송/디스크 쓰기 실패로 인해 $0\,Byte$ 파일이 생성되어 훈련 파이프라인 구동 시 예외(Crash)를 유발하는 불량 데이터셋 요소를 사전 감지하여 영구 제거한다.
@@ -298,6 +312,7 @@ graph TD
    - 정제 및 트리밍 과정을 마친 순수 오디오 발화 구간이 최소 물리 규격인 $3,000\,ms$ (3초) 미만인 레코드를 자동 배제함으로써 데이터셋의 정보 밀도를 유지한다.
 
 ### 4.2. 실시간 파이프라인 계측 카운터 (Pipeline Event Counters)
+
 데이터셋 청킹 및 보정이 실시간으로 가동되는 도중, 메모리 레벨에서 카운터 구조인 `PIPELINE_COUNTERS`를 통해 발생하는 이벤트를 실시간으로 누적 수치로 가시화한다:
 * **`invalid_timestamp_skip`**: WebVTT 등 소스 자막 타임스탬프 규격에 심각한 오류가 존재하여 자막 종료 지점이 시작 지점보다 과거이거나 동일하여 발생한 무효 스킵 수.
 * **`overlap_clamp_count`**: 연속되는 오디오 구간에서 자막 타임라인 간의 겹침 현상(Overlap)이 감지되어, 선행 자막의 종료점을 기반으로 후행 자막의 시작점을 밀어서 음향 시간 정합성을 강제 맞춤한 보정 횟수.
@@ -305,6 +320,7 @@ graph TD
 * **`too_short_chunk_drop`**: 물리 전사 슬라이싱 가공을 정상 완료하였으나 최종 오디오 신호의 유효 발화가 $3,000\,ms$ 스펙 제한에 도달하지 못해 기각 처리한 청크 수.
 
 ### 4.3. 다차원 정량적 사후 감사 (Post-Processing Audit)
+
 1. **물리 레코드 중복 감사 (Row-Level Deduplication Audit)**:
    - 문장 정규화 및 필터링(`[0-9A-Za-z가-힣]+`)을 통과한 `transcription_clean` 텍스트 간의 1:1 전수 비교(Exact-Match) 연산을 수행한다.
    - 데이터셋 적재 단계에서의 물리적인 로우 레벨 중복 적재도(Row-Level Duplicity)를 완벽 검출하여 학습 데이터셋 내의 중복 편향(Overfitting bias)을 억제하며, 중복이 검출될 경우 MLOps 감사 보고서에 상위 5개 중복 증거를 즉각 박제한다.
@@ -315,6 +331,7 @@ graph TD
    - 전수 조사가 마무리된 직후, 무작위로 5개의 물리 청크를 강제 샘플링하여 파일명, 재생시간(sec), 문자 밀도(Characters Per Second, CPS), 데시벨 음향 에너지(dBFS), 원문 텍스트 Snippet을 그대로 박제한다. 이를 통해 엔지니어 및 리뷰어가 전처리 통계의 실효성을 즉각 육안으로 확인할 수 있다.
 
 ### 4.4. 영구 MLOps 품질 보고서 3종 세트 (Permanent Artifacts)
+
 가공 및 검수가 완료되는 즉시 각 태스크별 고유 샌드박스 경로(`dataset/<task_name>/`)에 다음 3가지 영구 아티팩트가 생성된다:
 * **`validation_report.md`**: 전사 무결성 판정 그리드, 분위수 분포(p50, p90, p99 등) 오디오 통계, 4대 실시간 계측 카운터, 로우 중복 감사 증거, 구어체 연속 반복 및 무작위 샘플 프로필을 모두 아우르는 **프리미엄 설명성 리포트**.
 * **`audit_summary.json`**: MLOps 자동화 대시보드와 파이프라인 연동을 위해 통계치와 카운터 데이터를 머신러닝 분석 규격으로 정제하여 저장한 JSON 프로파일링 요약서.
@@ -322,7 +339,7 @@ graph TD
 
 ---
 
-## 5. 설치 및 파이프라인 가이드 (Execution Pipeline)
+## 7. 설치 및 파이프라인 가이드 (Execution Pipeline)
 
 본 프로젝트는 복잡한 멀티미디어 처리와 딥러닝 가상 환경의 완벽한 재현을 도모하고 인프라 구성 상의 불일치를 해결하기 위해 혁신적인 단일 통합 설치 전략 및 상세 운영 가이드를 제공한다.
 
@@ -365,6 +382,7 @@ python setup.py
     * `plotext` & `python-docx`: CLI 환경을 위한 아스키(ASCII) 터미널 플롯 시각화 및 MLOps 고품질 Word 문서 보고서 빌드.
 
 #### 5.1.2. 시스템 레벨: 외부 바이너리 격리 관리 (Isolated FFmpeg)
+
 운영체제의 환경 변수(`PATH`) 오염으로 인한 바이너리 버전 충돌을 원천 차단하기 위해 **격리 격벽 전략**을 구현한다.
 1. **격리 프로비저닝**: `scripts/install_ffmpeg.ps1`을 가동하여 검증된 FFmpeg 정적 바이너리를 `C:\ffmpeg\bin`에 고립식으로 영구 안착시킨다.
 2. **정적 절대 경로 바인딩**: 시스템 전역 환경 변수를 건드려 타 프로세스를 방해하지 않고, 파이프라인의 오디오 커팅 및 리샘플링 실행 시 이 격리된 절대 경로에서 FFmpeg 바이너리를 직접 지정/참조하여 무결성을 달성한다.
@@ -376,6 +394,7 @@ python setup.py
 본 파이프라인은 데이터의 생성부터 최종 배포용 최적 양자화 모델 추출까지 전 과정을 CLI 도구로 제어한다.
 
 #### 1단계: 설명성 데이터셋 구축 및 품질 검수 (`scripts/01_build_dataset.py`)
+
 이 단계는 로컬 원본 경로 또는 유튜브 등 비정형 소스로부터 완벽히 정제된 고품질의 WAV 청크 데이터셋을 구축하고 품질 설명 아티팩트를 저장하는 MLOps ETL 단계이다.
 * **주요 핵심 메커니즘:**
   - **Task Sandbox Isolation**: `--name <task_name>` 파라미터를 입력받아 `dataset/<task_name>` 디렉토리를 물리적 샌드박스로 확보하여 독립된 WAV 청크 및 메타데이터를 유지하므로 멀티 태스크 학습 데이터 혼입을 막는다.
@@ -389,6 +408,7 @@ python setup.py
   ```
 
 #### 2단계: 안정성 최우선 LoRA 파인튜닝 (`scripts/02_start_training.py`)
+
 베이스 Whisper 모델 가중치에 타깃 도메인 시사/경제 어휘 지식을 저차원 가중치로 가산 및 파인튜닝하는 안정성 강화 학습 단계이다.
 * **주요 핵심 메커니즘:**
   - **IterableDataset Flat-Memory Stream**: 텐서 데이터를 메모리에 올리지 않고 필요할 때 실시간 스트리밍 로딩하여 Windows `WinError 87` 메모리 맵 한계 에러를 근본 차단한다.
@@ -400,6 +420,7 @@ python setup.py
   ```
 
 #### 3단계: 정량적 성능 평가 (`scripts/eval.py`)
+
 학습이 끝난 모델의 실제 언어적 음성 인식 정확도를 Levenshtein Distance 수식 기반으로 검증하는 품질 진단 단계이다.
 * **주요 핵심 메커니즘:**
   - **WER / CER 과학적 계측**: 평가 셋을 Whisper 생성 파이프라인에 투입하여 추론 텍스트를 생성하고, 레이블 정답과 비교하여 편집 거리 오차율(WER, CER)을 수학적으로 산출한다.
@@ -411,6 +432,7 @@ python setup.py
   ```
 
 #### 4단계: 모델 병합 및 배포 최적화 (`scripts/03_export_model.py` & `scripts/export_gguf.py`)
+
 분리되어 학습된 LoRA 어댑터 가중치를 원본 Whisper 모델 본체와 일체화하고 C++ 초고속 추론 환경을 위해 GGUF 변환을 수행하는 배포 최적화 단계이다.
 * **주요 핵심 메커니즘:**
   - **Weights Merger**: `merge_and_unload()` 메서드를 통해 원본 가중치 가속 매트릭스에 LoRA 행렬 가중치를 수학적으로 완전히 결합한 단일 HuggingFace 포맷 모델을 출력한다.
@@ -434,11 +456,12 @@ python setup.py
 
 ---
 
-## 6. 실험 로드맵 및 검증 전략 (Experimental Roadmap & Methodology)
+## 8. 실험 로드맵 및 검증 전략 (Experimental Roadmap & Methodology)
 
 본 파이프라인의 궁극적인 존재 가치는 단순 학습의 자동화를 넘어, 오디오 데이터의 **전처리 정밀도(Chunking Level)**와 모델의 수용 용량(Model Size) 간의 시너지 임계점을 실험을 통해 과학적으로 규명하는 데 있다.
 
 ### 6.1. 실험 설계 원칙 (Design of Experiments)
+
 학습 파라미터(Learning Rate, Batch Size, Optimizer)의 정적 제어를 원칙으로 삼으며, 오직 독립 변수로서 **"오디오 청킹 레벨(Lv.1 ~ Lv.3)"**과 **"모델 뼈대(Tiny, Small, Large-v3)"**만을 변형하여 목적 함수인 $\min(\text{WER}, \text{CER})$를 추구한다.
 - **평가 셋**: 슈카월드 특정 에피소드에서 무작위 추출된 10%의 홀드아웃(Hold-out) 데이터셋 활용.
 
@@ -475,6 +498,7 @@ python setup.py
 | [ ] | **Phase 4** | **Large-v3**| **Lv.3 (Skilled)** | `Final Boss` | - / - | - |
 
 ### 6.4. 전처리(Chunking) 레벨의 정밀 정의
+
 * **Lv.1 (Basic) - Time-based Accumulation**:
   - **전략**: 자막 스트림의 타임스탬프를 맹목적으로 누적 계산하여 약 25초 간격으로 단순 산술 절단한다.
   - **특징**: 단순하여 I/O 비용이 낮으나, 문장 또는 어휘의 한복판이 잘려 디코더 가중치 업데이트 시 모델의 문맥 엔트로피 Loss 왜곡을 유발하기 쉽다.
@@ -490,7 +514,7 @@ python setup.py
 
 ---
 
-## 7. 아키텍처 설계 철학 및 트레이드오프 (Architecture Philosophy & Trade-offs)
+## 9. 아키텍처 설계 철학 및 트레이드오프 (Architecture Philosophy & Trade-offs)
 
 본 프로젝트는 고비용의 클라우드 인프라나 불안정한 외부 API 서비스에 의존하지 않고, 독립된 온프레미스/로컬 환경에서 최고 수준의 안정성을 보장하며 작동하도록 설계되었습니다. 개발 및 운영 과정에서 결정된 주요 설계 철학과 이에 따른 기술적 트레이드오프는 다음과 같습니다.
 
@@ -550,3 +574,19 @@ python setup.py
 
 ---
 > **"데이터가 장인정신을 만나면, 인공지능은 예술이 된다."** - AMEVA STT Project
+
+## 9. 연락처 (Contact)
+
+저는 Multi-Agent Systems, Edge Computing, 그리고 AI SRE 분야에 대한 학술적 담론을 언제나 환영합니다.
+
+- **GitHub**: [@uno-km](https://github.com/uno-km)
+- **Email**: zhfldk014745@naver.com
+- **Tstory**: [my-blog](https://uno-kim.tistory.com/)
+- **Research Focus**: Hierarchical AI Orchestration, Edge-native Inference, Data Sovereignty
+- **Generated by AMEVA Researcher Portfolio Builder**
+
+*Last Updated: June 9, 2026*
+
+---
+
+<sub>*빅테크의 클라우드 종속을 거부하고, 온프레미스 자율 지능의 독립과 생존을 실증합니다.*</sub>
