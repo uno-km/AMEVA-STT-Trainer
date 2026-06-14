@@ -5,7 +5,7 @@ from urllib.parse import urljoin
 
 class APIClient:
     def __init__(self):
-        self.base_url = os.environ.get("AMEVA_API_URL", "http://127.0.0.1:8000")
+        self.base_url = os.environ.get("AMEVA_API_URL", "http://127.0.0.1:8600")
         self.api_key = os.environ.get("AMEVA_API_KEY", "")
         self.headers = {
             "Content-Type": "application/json"

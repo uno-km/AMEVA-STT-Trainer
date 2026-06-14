@@ -40,7 +40,7 @@ def check_server_health():
             console.print(Panel(
                 "[bold red]❌ 백엔드 API 서버에 연결할 수 없습니다.[/bold red]\n\n"
                 "[white]서버가 실행 중인지 확인하세요.[/white]\n"
-                "[dim]명령어: uvicorn src.backend.main:app --host 0.0.0.0 --port 8000[/dim]",
+                "[dim]명령어: uvicorn src.backend.main:app --host 0.0.0.0 --port 8600[/dim]",
                 border_style="red"
             ))
             sys.exit(1)

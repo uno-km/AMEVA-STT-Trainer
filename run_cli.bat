@@ -22,8 +22,8 @@ IF %errorlevel% NEQ 0 (
 echo.
 
 REM ── [Step 2] 백엔드 API 서버 연결 확인 ────────────────────────────────────
-echo [INFO] Checking if backend API server is running on port 8000...
-netstat -ano | find "8000" >nul
+echo [INFO] Checking if backend API server is running on port 8600...
+netstat -ano | find "8600" >nul
 if %errorlevel% neq 0 (
     echo [WARN] API 서버가 실행 중이 아닙니다. 자동으로 서버를 시작합니다...
     start "AMEVA API Server" run_server.bat

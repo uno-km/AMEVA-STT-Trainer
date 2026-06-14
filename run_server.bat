@@ -21,7 +21,7 @@ IF %errorlevel% NEQ 0 (
 echo.
 
 REM ── [Step 2] FastAPI 백엔드 서버 기동 ─────────────────────────────────────
-echo [INFO] Starting FastAPI server on 0.0.0.0:8000
-venv\Scripts\python.exe -m uvicorn src.backend.main:app --host 0.0.0.0 --port 8000
+echo [INFO] Starting FastAPI server on 0.0.0.0:8600
+venv\Scripts\python.exe -m uvicorn src.backend.main:app --host 0.0.0.0 --port 8600
 
 pause

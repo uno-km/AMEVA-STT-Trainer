@@ -40,4 +40,4 @@ def root():
     return {"message": "AMEVA-STT-Trainer API is running. Visit /docs for Swagger UI."}
 
 if __name__ == "__main__":
-    uvicorn.run("src.backend.main:app", host="0.0.0.0", port=8000, reload=False)
+    uvicorn.run("src.backend.main:app", host="0.0.0.0", port=8600, reload=False)
