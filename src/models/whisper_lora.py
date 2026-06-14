@@ -126,5 +126,22 @@ def merge_and_save():
     # whisper.cpp 변환 스크립트가 요구하는 vocab.json 파일을 강제로 생성
     processor.tokenizer.save_vocabulary(MERGED_DIR)
 
+    # [중요] whisper.cpp의 convert-h5-to-ggml.py 레시피가 요구하는 added_tokens.json 등 누락 파일 강제 복사
+    try:
+        model_folder_name = "models--" + model_id.replace("/", "--")
+        cache_hub_dir = os.path.join(os.environ.get("HF_HOME", r"C:\ameva\models\stt"), "hub", model_folder_name, "snapshots")
+        if os.path.exists(cache_hub_dir):
+            snapshots = sorted(os.listdir(cache_hub_dir))
+            if snapshots:
+                latest_snapshot_dir = os.path.join(cache_hub_dir, snapshots[-1])
+                for f_name in ["added_tokens.json", "normalizer.json", "merges.txt", "vocab.json"]:
+                    src_file = os.path.join(latest_snapshot_dir, f_name)
+                    dest_file = os.path.join(MERGED_DIR, f_name)
+                    if os.path.exists(src_file) and not os.path.exists(dest_file):
+                        shutil.copy(src_file, dest_file)
+                        logger.info(f"[MERGE] whisper.cpp 연동용 {f_name} 복사 완료 -> {dest_file}")
+    except Exception as e:
+        logger.warning(f"[MERGE] whisper.cpp 토크나이저 파일 복제 오류 (양자화 시 주의): {e}")
+
     logger.info(f"병합 완료 -> {MERGED_DIR}")
     return MERGED_DIR

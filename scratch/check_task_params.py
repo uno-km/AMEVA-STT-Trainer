@@ -2,19 +2,37 @@ import sqlite3
 import json
 
 conn = sqlite3.connect("db/stt_trainer.db")
+conn.row_factory = sqlite3.Row
 cursor = conn.cursor()
-cursor.execute("SELECT * FROM tb_task WHERE id = 'a28cf223-f1c6-4c5e-914a-8f828bfe721f'")
-task = cursor.fetchone()
-print("Task Row:", task)
 
-cursor.execute("SELECT * FROM tb_task_dtl WHERE task_id = 'a28cf223-f1c6-4c5e-914a-8f828bfe721f'")
-details = cursor.fetchall()
-for d in details:
-    print("Dtl Row:", d)
-    if d[4]: # parameters is at index 4 (dtl_id, task_id, step_seq, step_name, parameters, next_step, status, ...)
+# Get the latest task
+cursor.execute("SELECT * FROM tb_task ORDER BY create_dt DESC LIMIT 1")
+task = cursor.fetchone()
+
+if not task:
+    print("NO_TASK")
+else:
+    print("=== TASK INFO ===")
+    print(f"ID: {task['id']}")
+    print(f"Name: {task['tsk_nm']}")
+    print(f"Level: {task['level']}")
+    print(f"Status: {task['status']}")
+    print(f"Create Date: {task['create_dt']}")
+    print()
+    
+    # Get details
+    cursor.execute("SELECT * FROM tb_task_dtl WHERE task_id = ? ORDER BY step_seq ASC", (task['id'],))
+    details = cursor.fetchall()
+    for d in details:
+        print(f"=== STEP {d['step_seq']}: {d['step_name']} ===")
+        print(f"Status: {d['status']}")
+        print(f"Next Step: {d['next_step']}")
+        params = d['parameters']
         try:
-            print("  Decoded Params:", json.loads(d[4]))
-        except Exception as e:
-            print("  Error decoding:", e)
+            decoded = json.loads(params)
+            print(json.dumps(decoded, indent=2, ensure_ascii=False))
+        except:
+            print(params)
+        print()
 
 conn.close()
