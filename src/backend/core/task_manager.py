@@ -54,6 +54,8 @@ class TaskManager:
             cmd.extend(["--source_type", "youtube", "--url", s1_params.get("url", ""), "--count", str(s1_params.get("count", 5))])
         else: 
             cmd.extend(["--source_type", "local", "--folder", s1_params.get("folder", "")])
+        if "mode" in s1_params:
+            cmd.extend(["--mode", s1_params["mode"]])
         cmd.extend(["--name", f"{name}_{task_id[:8]}"])
         
         self._run_script_async(cmd, task_id, level=1)
@@ -272,6 +274,8 @@ class TaskManager:
             "--count", str(params.get("count", 5)),
             "--folder", params.get("folder", "")
         ]
+        if "mode" in params:
+            cmd.extend(["--mode", params["mode"]])
         
         # [중요] 태스크 격리 폴더명을 전달하여 dataset/태스크명/raw/... 경로로 다운로드되도록 보장
         task_name = params.get("name")

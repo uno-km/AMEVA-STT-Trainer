@@ -185,9 +185,32 @@ def _launch_action(action: str, task: dict):
         step2_params = {}
         step3_params = {}
         if next_step == 2:
-            step2_params = {"action":"start_training", "model_id": "openai/whisper-tiny", "max_steps": 400, "batch_size": 2}
+            model_id = Prompt.ask("학습 모델", default="openai/whisper-tiny")
+            max_steps = IntPrompt.ask("Max Steps", default=400)
+            learning_rate = Prompt.ask("Learning Rate", default="1e-4")
+            batch = IntPrompt.ask("Batch Size", default=2)
+            try:
+                lr_val = float(learning_rate)
+            except ValueError:
+                lr_val = 1e-4
+            step2_params = {
+                "action": "start_training",
+                "model_id": model_id,
+                "max_steps": max_steps,
+                "learning_rate": lr_val,
+                "batch_size": batch
+            }
         elif next_step == 3:
-            step3_params = {"action":"export_model", "auto_export": True, "method": "q4_0"}
+            quantize = Confirm.ask("모델 양자화를 진행합니까?", default=True)
+            method = "q4_0"
+            if quantize:
+                method = Prompt.ask("양자화 방식", choices=["q4_0", "q4_1", "q5_0", "q5_1", "q8_0", "f16"], default="q4_0")
+            step3_params = {
+                "action": "export_model",
+                "auto_export": True,
+                "no_quantize": not quantize,
+                "method": method
+            }
             
         payload = {"task_id": task_id, "step_limit": next_step, "step2_params": step2_params, "step3_params": step3_params}
         res = api_client.post("/api/v1/tasks/start_train", payload)
@@ -204,24 +227,59 @@ def start_new_task():
     console.print(Panel("[bold green]🚀 신규 학습 파이프라인 (원격 기동)[/bold green]", expand=False))
 
     task_name = Prompt.ask("[cyan]1.[/cyan] 태스크 명", default="Remote_Task")
-    source_type = Prompt.ask("[cyan]2.[/cyan] 데이터 소스", choices=["youtube","local"], default="youtube")
+    step_limit = IntPrompt.ask("[cyan]2.[/cyan] 파이프라인 진행 범위 (1: 수집만, 2: 학습까지, 3: 양자화/내보내기까지)", choices=[1, 2, 3], default=3)
+    source_type = Prompt.ask("[cyan]3.[/cyan] 데이터 소스", choices=["youtube","local"], default="youtube")
     
-    s1 = {}
+    s1 = {"source_type": source_type}
     if source_type == "youtube":
-        s1 = {"source_type":"youtube", "url": "https://www.youtube.com/@syukaworld/videos", "count": 10}
+        yt_url = Prompt.ask("[cyan]4.[/cyan] 유튜브 채널/영상 URL", default="https://www.youtube.com/@syukaworld/videos")
+        yt_count = IntPrompt.ask("[cyan]5.[/cyan] 수집할 영상 개수", default=5)
+        s1["url"] = yt_url
+        s1["count"] = yt_count
     else:
-        s1 = {"source_type":"local", "folder": "/app/dataset"}
+        local_folder = Prompt.ask("[cyan]4.[/cyan] 로컬 데이터셋 폴더 경로", default="dataset/raw")
+        s1["folder"] = local_folder
 
-    model_id = Prompt.ask("[cyan]5.[/cyan] 모델", default="openai/whisper-tiny")
-    max_steps = IntPrompt.ask("[cyan]6.[/cyan] Max Steps", default=400)
-    batch = IntPrompt.ask("[cyan]8.[/cyan] Batch Size", default=2)
+    prep_mode = Prompt.ask("[cyan]6.[/cyan] 데이터 전처리 모드", choices=["basic", "advanced"], default="basic")
+    s1["mode"] = prep_mode
+
+    step2_params = {}
+    if step_limit >= 2:
+        model_id = Prompt.ask("[cyan]7.[/cyan] 학습 모델", default="openai/whisper-tiny")
+        max_steps = IntPrompt.ask("[cyan]8.[/cyan] Max Steps", default=400)
+        learning_rate = Prompt.ask("[cyan]9.[/cyan] Learning Rate", default="1e-4")
+        batch = IntPrompt.ask("[cyan]10.[/cyan] Batch Size", default=2)
+        try:
+            lr_val = float(learning_rate)
+        except ValueError:
+            lr_val = 1e-4
+        step2_params = {
+            "action": "start_training",
+            "model_id": model_id,
+            "max_steps": max_steps,
+            "learning_rate": lr_val,
+            "batch_size": batch
+        }
+
+    step3_params = {}
+    if step_limit == 3:
+        quantize = Confirm.ask("[cyan]11.[/cyan] 3단계 모델 양자화 진행 여부", default=True)
+        method = "q4_0"
+        if quantize:
+            method = Prompt.ask("[cyan]12.[/cyan] 양자화 방식", choices=["q4_0", "q4_1", "q5_0", "q5_1", "q8_0", "f16"], default="q4_0")
+        step3_params = {
+            "action": "export_model",
+            "auto_export": True,
+            "no_quantize": not quantize,
+            "method": method
+        }
 
     body = {
         "name": task_name,
-        "step_limit": 3,
+        "step_limit": step_limit,
         "step1_params": s1,
-        "step2_params": {"action":"start_training","model_id":model_id,"max_steps":max_steps,"batch_size":batch},
-        "step3_params": {"action":"export_model","auto_export":True,"method":"q4_0"}
+        "step2_params": step2_params,
+        "step3_params": step3_params
     }
 
     console.print("\n[bold yellow]원격 서버로 파이프라인 기동 요청 중...[/bold yellow]")

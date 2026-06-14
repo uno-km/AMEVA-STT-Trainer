@@ -31,7 +31,7 @@ IF %errorlevel% NEQ 0 (
 echo.
 
 echo [INFO] Checking API server on port 8600...
-netstat -ano | find "8600" >nul
+netstat -ano | findstr :8600 | findstr LISTENING >nul
 if %errorlevel% neq 0 (
     echo [WARN] API server not running. Starting in background...
     start "AMEVA API Server" run_server.bat
