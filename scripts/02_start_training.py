@@ -95,6 +95,14 @@ def main():
     logger.info("[2단계] Whisper LoRA 학습 시작")
     logger.info("=" * 50)
 
+    # ── [Pre-flight] 하드웨어 환경 진단 및 Rich 대시보드 출력 ──
+    # 학습 시작 전 어떤 환경(CPU/GPU Tier)에서 어떤 파라미터로 진행되는지 시각적으로 안내합니다.
+    try:
+        from scripts.check_hardware import run_preflight
+        run_preflight()
+    except Exception as _hw_err:
+        console.print(f"[yellow]⚠️  하드웨어 진단 건너뜀: {_hw_err}[/yellow]")
+
     # 1. 시스템 자원 확인 (skip 옵션 전달)
     if not check_resources(skip_confirm=args.skip):
         logger.warning("사용자가 학습을 취소했습니다.")

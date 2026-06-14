@@ -132,6 +132,59 @@ MODEL_DEFAULTS = {
 }
 
 
+# ---------------------------------------------------------------------------- #
+#  GPU Tier별 학습 파라미터 자동 보정 테이블                                      #
+#  hardware_profile.py의 HWProfile.tier 값에 매핑됨                             #
+# ---------------------------------------------------------------------------- #
+
+GPU_TIER_OVERRIDES = {
+    # Tier 0: CPU Only
+    # fp16 불가, gradient_checkpointing 비활성 (윈도우 호환성 문제 방지)
+    0: {
+        "batch_size"             : 2,
+        "gradient_accumulation"  : 8,
+        "fp16"                   : False,
+        "bf16"                   : False,
+        "gradient_checkpointing" : False,
+        "dataloader_pin_memory"  : False,
+    },
+    # Tier 1: 구형 GPU (Pascal CC 6.x, Turing Entry, VRAM < 8GB)
+    # 예: GTX 1060, GTX 1070 Ti, GTX 1080, RTX 2060
+    # Tensor Core 없음 → CUDA Core FP16으로 동작 (속도↑, 안정성 ↔ VRAM 절약)
+    # gradient_checkpointing=True: VRAM 8GB 내에서 안전하게 메모리 ↔ 연산 트레이드오프
+    1: {
+        "batch_size"             : 4,
+        "gradient_accumulation"  : 4,
+        "fp16"                   : True,
+        "bf16"                   : False,
+        "gradient_checkpointing" : True,
+        "dataloader_pin_memory"  : True,
+    },
+    # Tier 2: 보급형 GPU (Turing/Ampere mid, VRAM 8~12GB, CC >= 7.0)
+    # 예: RTX 2080 Ti, RTX 3070, RTX 3080
+    # Tensor Core FP16 완벽 지원 → gradient_checkpointing 불필요
+    2: {
+        "batch_size"             : 8,
+        "gradient_accumulation"  : 2,
+        "fp16"                   : True,
+        "bf16"                   : False,
+        "gradient_checkpointing" : False,
+        "dataloader_pin_memory"  : True,
+    },
+    # Tier 3: 고사양 GPU (Ampere/Ada high, VRAM > 12GB)
+    # 예: RTX 3090, RTX 4090, A100
+    # 풀 가속 모드: 최대 배치, 최소 누적
+    3: {
+        "batch_size"             : 16,
+        "gradient_accumulation"  : 1,
+        "fp16"                   : True,
+        "bf16"                   : False,
+        "gradient_checkpointing" : False,
+        "dataloader_pin_memory"  : True,
+    },
+}
+
+
 
 # ---------------------------------------------------------------------------- #
 #  설정 로더                                                                     #

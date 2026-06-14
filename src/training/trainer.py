@@ -26,8 +26,9 @@ from transformers import (
     Seq2SeqTrainer,
 )
 
-from src.core.config import CFG, DATASET_DIR, METADATA_PATH, LORA_DIR
+from src.core.config import CFG, DATASET_DIR, METADATA_PATH, LORA_DIR, GPU_TIER_OVERRIDES
 from src.core.exceptions import TrainingError, exception_guard
+from src.core.hardware_profile import get_profile
 from src.models.whisper_lora import apply_lora
 from src.training.callbacks import DashboardCallback
 from src.utils import logger
@@ -277,8 +278,21 @@ def run_training(resume_from_checkpoint: str = None, task_id: str = None):
         
     model_id = CFG["model_id"]  # 덮어쓰기 완료된 타겟 모델명 로드
     
+    # ---- [하드웨어 프로파일 감지] ----
+    # 실행 시 CPU/GPU/VRAM/CUDA를 자동 감지하여 최적 학습 파라미터를 결정합니다.
+    hw = get_profile()
+    tier_params = GPU_TIER_OVERRIDES.get(hw.tier, GPU_TIER_OVERRIDES[0])
+    
+    logger.info(f"[HW] 감지된 환경: {hw.gpu_name} | Tier {hw.tier} | {hw.profile_name}")
+    logger.info(f"[HW] 학습 파라미터 적용: batch={tier_params['batch_size']}, "
+                f"accumulation={tier_params['gradient_accumulation']}, "
+                f"fp16={tier_params['fp16']}, "
+                f"checkpointing={tier_params['gradient_checkpointing']}")
+    for w in hw.warnings:
+        logger.warning(w)
+
     # 윈도우 CPU 환경에서의 안정성 및 메모리 누수 방지를 위한 특수 매개변수 주입
-    #   - torch_dtype=torch.float32: CPU 하드웨어에 최적화된 표준 정밀도 연산 강제
+    #   - torch_dtype=torch.float32: CPU/GPU 공용 안전 기본값 (FP16은 TrainingArguments에서 처리)
     #   - low_cpu_mem_usage=False: 윈도우 가상메모리 할당 에러(WinError 1455) 충돌 원천 차단
     try:
         import google.colab
@@ -299,6 +313,13 @@ def run_training(resume_from_checkpoint: str = None, task_id: str = None):
     # [극단적인 중요 설정] model.config.use_cache = False
     # (LoRA 미세조정 시 그래디언트 축적 및 역전파 계산 과정에서 중복 캐싱을 막아 WinError 87 오류를 철저히 차단함)
     model.config.use_cache = False
+    
+    # [GPU 자동 디바이스 바인딩]
+    # Tier 1 이상(CUDA 환경)에서 모델을 GPU로 이동합니다.
+    # gradient_checkpointing은 LoRA 주입 후 적용해야 안전하므로 여기선 설정만 예약합니다.
+    if hw.tier > 0 and hw.torch_cuda_available:
+        model = model.to("cuda")
+        logger.info(f"[HW] 모델이 GPU로 이동되었습니다: {hw.gpu_name}")
     
     # 오디오 스펙트로그램 처리 및 한글 디코딩을 주도하는 프로세서 기동
     processor = WhisperProcessor.from_pretrained(
@@ -358,6 +379,13 @@ def run_training(resume_from_checkpoint: str = None, task_id: str = None):
     # 모델의 주요 어텐션 가중치층에 주입하여 저스펙 환경에서도 초고속 모델 개조가 일어날 수 있게 매핑
     model = apply_lora(model)
 
+    # [GPU] gradient_checkpointing은 LoRA 주입 완료 후 활성화해야 PEFT와 충돌하지 않음
+    # Tier 1 이상 + enable_checkpointing=True인 경우에만 적용
+    if tier_params["gradient_checkpointing"] and hw.tier > 0:
+        model.enable_input_require_grads()  # PEFT + gradient_checkpointing 호환성 필수 설정
+        model.gradient_checkpointing_enable()
+        logger.info("[HW] Gradient Checkpointing 활성화 (VRAM 절약 모드)")
+
     # [가이드 반영] 체크포인트 재개 시 가중치 폭발 방지를 위해 학습률(learning_rate)을 기존 설정의 절반으로 조정
     original_lr = CFG["learning_rate"]
     current_lr = original_lr
@@ -366,30 +394,39 @@ def run_training(resume_from_checkpoint: str = None, task_id: str = None):
         logger.info(f"[RESUME] 재개 학습 보호막 작동: Learning Rate를 절반으로 낮춥니다. ({original_lr} -> {current_lr})")
 
     # ---- [6단계] 학습 파라미터(Seq2SeqTrainingArguments) 설정 ----
-    # [각 아규먼트별 하드웨어 변수 맵핑 구조 정의]
+    # [GPU Tier 자동 적응] hardware_profile.py에서 감지된 Tier 기반으로 파라미터 자동 오버라이드
+    # CFG에서 사용자가 명시적으로 설정한 값이 있는 경우 DB 오버라이드가 이미 적용되어 있음
+    # 배치/fp16 등은 Tier 오버라이드로 최종 확정됨
+    effective_batch_size = tier_params["batch_size"]
+    effective_accumulation = tier_params["gradient_accumulation"]
+    effective_fp16 = tier_params["fp16"]
+    effective_pin_memory = tier_params["dataloader_pin_memory"]
+    # gradient_checkpointing은 이미 위에서 model에 직접 적용하였으므로 Trainer에는 False 전달
+    # (Trainer 내부에서 중복 enable하면 PEFT 충돌 위험)
+    
     training_args = Seq2SeqTrainingArguments(
-        output_dir                  = LORA_DIR,                       # 가중치 어댑터 결과 저장 폴더 (String)
-        per_device_train_batch_size = CFG["batch_size"],              # 배치 당 연산 데이터 크기 (Integer)
-        gradient_accumulation_steps = CFG["gradient_accumulation"],   # 메모리 부족 시 그라디언트를 누적하여 업데이터 수행 (Integer)
-        learning_rate               = current_lr,                     # 옵티마이저 학습율 가중비율 (Float)
-        warmup_steps                = CFG["warmup_steps"],            # 초반 오버슈팅 방지를 위한 적응용 스텝수 (Integer)
-        max_steps                   = CFG["max_steps"],               # 최대 총 훈련 반복 횟수 (Integer)
-        gradient_checkpointing      = False,                          # 윈도우 CPU 환경에서 오류를 내는 기능이므로 비활성화 (Boolean)
-        fp16                        = torch.cuda.is_available(),      # [자동 감지] GPU 환경인 경우 16비트 가속 활성화, CPU인 경우 비활성화 (Boolean)
-        bf16                        = False,                          # bfloat16 포맷 오작동 배제용 비활성화 (Boolean)
-        eval_strategy               = "no",                           # 검증 비용 단 1초도 쓰지 않도록 평가 생략 (String)
-        save_steps                  = CFG["save_steps"],              # 체크포인트 디렉터리 물리 저장 주기 (Integer)
-        save_total_limit            = 3,                              # 저장 공간 절약을 위해 최신 3개 보존 후 구형 자동 삭제 (Integer)
-        logging_steps               = CFG["logging_steps"],           # 대시보드 및 터미널 출력용 로깅 주기 (Integer)
-        report_to                   = ["wandb"] if CFG["wandb"]["enabled"] else "none", 
-        disable_tqdm                = True,                           # 콘솔 텍스트 밀림 및 가독성 훼손 방지를 위해 TQDM 비활성화 (Boolean)
-        dataloader_num_workers      = 0,                              # 윈도우 스레드 포크 오류인 WinError 87 방지를 위해 멀티스레드 비활성화 (Integer)
-        dataloader_pin_memory       = False,                          # GPU 락 제한 해제를 위한 비활성화 (Boolean)
-        remove_unused_columns       = False,                          # 메타 데이터 잃지 않기 위해 정밀 보존 (Boolean)
-        push_to_hub                 = False,                          # 온라인 공유 업로드 비활성화 (Boolean)
-        optim                       = "adamw_torch",                  # PyTorch 빌트인 AdamW 정밀 옵티마이저 활용 (String)
-        max_grad_norm               = 1.0,                            # [가이드 반영] CPU 환경에서 그라디언트 폭발을 강력 억제하는 클리핑 (Float)
-        ignore_data_skip            = True,                           # [최적화] Dataset Generator에서 자체 스킵하므로 Trainer의 중복 스킵 차단
+        output_dir                  = LORA_DIR,                         # 가중치 어댑터 결과 저장 폴더 (String)
+        per_device_train_batch_size = effective_batch_size,             # [Tier 자동] 배치 당 연산 데이터 크기 (Integer)
+        gradient_accumulation_steps = effective_accumulation,           # [Tier 자동] 메모리 부족 시 그라디언트 누적 (Integer)
+        learning_rate               = current_lr,                       # 옵티마이저 학습율 가중비율 (Float)
+        warmup_steps                = CFG["warmup_steps"],              # 초반 오버슈팅 방지를 위한 적응용 스텝수 (Integer)
+        max_steps                   = CFG["max_steps"],                 # 최대 총 훈련 반복 횟수 (Integer)
+        gradient_checkpointing      = False,                            # 이미 model에 직접 적용했으므로 Trainer는 False (PEFT 호환)
+        fp16                        = effective_fp16,                   # [Tier 자동] GPU: True(FP16 가속), CPU: False (Boolean)
+        bf16                        = False,                            # bfloat16 포맷 오작동 배제용 비활성화 (Boolean)
+        eval_strategy               = "no",                             # 검증 비용 단 1초도 쓰지 않도록 평가 생략 (String)
+        save_steps                  = CFG["save_steps"],                # 체크포인트 디렉터리 물리 저장 주기 (Integer)
+        save_total_limit            = 3,                                # 저장 공간 절약을 위해 최신 3개 보존 후 구형 자동 삭제 (Integer)
+        logging_steps               = CFG["logging_steps"],             # 대시보드 및 터미널 출력용 로깅 주기 (Integer)
+        report_to                   = ["wandb"] if CFG["wandb"]["enabled"] else "none",
+        disable_tqdm                = True,                             # 콘솔 텍스트 밀림 및 가독성 훼손 방지를 위해 TQDM 비활성화 (Boolean)
+        dataloader_num_workers      = 0,                                # 윈도우 스레드 포크 오류인 WinError 87 방지 (Integer)
+        dataloader_pin_memory       = effective_pin_memory,             # [Tier 자동] GPU 환경: True(DMA 전송 가속), CPU: False (Boolean)
+        remove_unused_columns       = False,                            # 메타 데이터 잃지 않기 위해 정밀 보존 (Boolean)
+        push_to_hub                 = False,                            # 온라인 공유 업로드 비활성화 (Boolean)
+        optim                       = "adamw_torch",                    # PyTorch 빌트인 AdamW 정밀 옵티마이저 활용 (String)
+        max_grad_norm               = 1.0,                              # 그라디언트 폭발을 강력 억제하는 클리핑 (Float)
+        ignore_data_skip            = True,                             # [최적화] Dataset Generator에서 자체 스킵하므로 Trainer 중복 스킵 차단
     )
 
     import threading
