@@ -1,3 +1,18 @@
+> **[프로젝트 요약 (Resume Profile)]**
+> 
+> * **① 제목:** Windows CPU 최적화 Whisper LoRA 파인튜닝 플랫폼 (AMEVA STT Trainer)
+> * **② 주제:** 
+>   * 척박한 로컬 윈도우 CPU 가속 환경 하에서 대용량 한국어 오디오 및 자막 코퍼스를 기반으로 Whisper 모델의 LoRA 파인튜닝 및 배포용 포맷 변환 자동화 지향
+>   * `01_build_dataset` 파싱 엔진, `02_start_training` 트랜스포머 루프, `03_export_model` LoRA 어댑터 병합 모듈, GGUF 변환기 간의 파이프라인 협업 구현
+>   * 윈도우 커널의 메모리 맵핑 제한(`WinError 87`), 멀티프로세싱 Pickling 충돌, 그리고 오디오 디코딩 라이브러리 비호환성 문제를 해결하기 위해 격리형 아키텍처 구현
+> * **③ 내용요지:**
+>   * **사용 기술:** `Python 3.12`, `torch`, `torchaudio`, `transformers`, `peft` (LoRA), `datasets`, `accelerate`, `evaluate`, `jiwer`, `librosa`, `soundfile`, `pydub`, `yt-dlp`, `gguf`, `psutil`, `win10toast`
+>   * **사용 모델:** `Whisper (Tiny, Small, Medium)` (LoRA 파인튜닝 대상 베이스 모델 및 양자화 출력)
+>   * **핵심 알고리즘:** 가중치 행렬 경량 파인튜닝을 위한 `LoRA` 학습 알고리즘, 메모리 맵 충돌을 방지하는 `IterableDataset` 스트리밍 데이터 로더 제어, soundfile/librosa 기반 오디오 리샘플링 전처리, 모델 가중치 병합(`peft.PeftModel.merge_and_unload`), `GGUF` 모델 양자화 및 바이너리 직렬화
+>   * **에이전트/보안 제어 (또는 핵심 아키텍처 흐름):** yt-dlp 활용 학습용 미디어 취득 및 webvtt-py 싱크 정렬 -> metadata.csv 구축 -> IterableDataset 기반 캐싱 없는 스트리밍 토크나이저 초기화 -> LoRA 파인튜닝 진행 및 체크포인트 체크 -> lora_weights 저장 -> 베이스 Whisper 모델과 LoRA 어댑터 가중치 병합 -> gguf 스크립트를 통한 4-bit 양자화 바이너리 내보내기 흐름
+>   * **연구 성과:** 스트리밍 학습 모델 및 pin_memory 해제 설정을 구현하여 윈도우 CPU 단독 환경에서도 OOM 크래시나 매개변수 오류(`WinError 87`) 없이 LoRA 학습의 무한 가용성을 입증하고, LoRA 병합-GGUF 변환 연계를 통한 추론 속도 극대화
+> * **④ 기여도:** 단독 개발 (100% - 아키텍처 설계, 보안 시스템 구축, 코어 로직 구현 전담)
+
 # 📊 AMEVA-STT-Trainer: Domain-Specific Whisper Fine-tuning Pipeline
 
 ## 1. 개요 (Abstract)
