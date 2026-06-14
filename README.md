@@ -33,11 +33,11 @@
 
 ### 2.1. 데이터 획득 및 전처리 알고리즘 (Data Engineering & Signal Processing)
 본 파이프라인은 비정형 스트리밍 데이터로부터 고품질 학습 코퍼스를 추출하기 위해 고도의 시그널 프로세싱 및 정교한 텍스트 가공 체계를 통합 구축하였다.
-- **Suffix-Prefix Overlap Matching (접두사-접미사 중복 매칭 제거)**: 유튜브 자동생성 자막의 특성(실시간 단어 누적으로 인한 이전 자막과의 극심한 겹침)을 해결하기 위해, 공백을 제거한 텍스트 단위로 이전 꼬리(`last_tail`)와 새 텍스트 머리(`new_text`) 간의 접미사-접두사 일치 길이(Overlap Length)를 역추적한다. 오버랩된 중복 단어와 문맥을 온전하게 분리/제거하는 알고리즘을 도입하여 텍스트 데이터의 중복도를 $1\%$ 미만으로 억제한다.
+- **Suffix-Prefix Overlap Matching (접두사-접미사 중복 매칭 제거)**: 유튜브 자동생성 자막의 특성(실시간 단어 누적으로 인한 이전 자막과의 극심한 겹침)을 해결하기 위해, 공백을 제거한 텍스트 단위로 이전 꼬리(`last_tail`)와 새 텍스트 머리(`new_text`) 간의 접미사-접두사 일치 길이(Overlap Length)를 역추적한다. 오버랩된 중복 단어와 문맥을 온전하게 분리/제거하는 알고리즘을 도입하여 텍스트 데이터의 중복도를 1% 미만으로 억제한다.
 - **Boundary-Aware Dynamic Chunking (문장 경계 감지 동적 청킹)**: Whisper 모델의 30초 오디오 인풋 윈도우 한계를 맞추면서도 문장이 발화 도중 잘려 문맥이 끊기는 현상을 방지한다. 자막 텍스트 내에서 한국어 문장 종결 어미("다", "요", "죠", "니", "까") 또는 구두점(`.`, `?`, `!`)을 감지하여, 15초 이상 30초 미만의 최적의 타임스탬프 시점에서 세그먼트를 동적으로 잘라내는 **Boundary protection** 메커니즘을 적용한다.
-- **Robust Audio Resampling & Signal Processing**: `yt-dlp`를 통해 획득한 고화질 오디오 컨테이너를 타임라인과 완벽히 동조하여 밀리초(ms) 단위로 정밀하게 슬라이싱하고, 모든 청크 소스는 $f_s = 16,000\,Hz$ (Mono)로 강제 리샘플링하여 오디오 품질의 일관성을 강화한다.
-- **Feature Extraction (Log-Mel Spectrogram)**: 연속적인 오디오 신호에 STFT(Short-Time Fourier Transform)를 적용하고, $N=80$ 채널의 Mel-filterbank를 거쳐 인간의 청각적 특성을 모델링한 Log-Mel Spectrogram 인풋 텐서로 변환하며, 이는 다음과 같은 수학식으로 표현된다:
-  $$ S_{mel}(m) = \ln \left( \sum_{k=0}^{N-1} |X(k)|^2 \cdot H_m(k) \right) $$
+- **Robust Audio Resampling & Signal Processing**: `yt-dlp`를 통해 획득한 고화질 오디오 컨테이너를 타임라인과 완벽히 동조하여 밀리초(ms) 단위로 정밀하게 슬라이싱하고, 모든 청크 소스는 f_s = 16,000 Hz (Mono)로 강제 리샘플링하여 오디오 품질의 일관성을 강화한다.
+- **Feature Extraction (Log-Mel Spectrogram)**: 연속적인 오디오 신호에 STFT(Short-Time Fourier Transform)를 적용하고, N=80 채널의 Mel-filterbank를 거쳐 인간의 청각적 특성을 모델링한 Log-Mel Spectrogram 인풋 텐서로 변환하며, 이는 다음과 같은 수학식으로 표현된다:
+  S_mel(m) = ln( sum( |X(k)|^2 * H_m(k) ) )
   
   본 시스템에서는 `transformers.WhisperFeatureExtractor` 모듈을 격리 환경에서 호출하여 주파수를 80차원 오디오 Mel-Spectrogram 특징 벡터로 정밀 변환한다.
   
@@ -53,9 +53,9 @@
 ### 2.2. 모델 아키텍처 및 학습 전략 (Fine-Tuning Methodology)
 
 본 프로젝트는 OpenAI의 **Whisper** 모델(Transformer 기반 Encoder-Decoder 구조)을 베이스로 하며, 효율적인 도메인 적응을 위해 PEFT 전략을 채택하였다.
-- **LoRA (Low-Rank Adaptation) Theory**: 모델의 전체 파라미터 $W \in \mathbb{R}^{d \times k}$를 고정한 채, 저차원 행렬 $A$와 $B$의 곱으로 표현되는 업데이트 행렬 $\Delta W$만을 학습시킨다. 이는 다음과 같은 가중치 업데이트 식을 따른다:
-  $$ W_{updated} = W_0 + \Delta W = W_0 + BA \quad (\text{where } B \in \mathbb{R}^{d \times r}, A \in \mathbb{R}^{r \times k}, r \ll d, k) $$
-  이를 통해 학습 파라미터 수를 기존 대비 $1\%$ 미만으로 줄이면서도 도메인 특화 용어를 정밀하게 캡처한다.
+- **LoRA (Low-Rank Adaptation) Theory**: 모델의 전체 파라미터 W in R^(d x k)를 고정한 채, 저차원 행렬 A와 B의 곱으로 표현되는 업데이트 행렬 ΔW만을 학습시킨다. 이는 다음과 같은 가중치 업데이트 식을 따른다:
+  W_updated = W_0 + ΔW = W_0 + B * A (where B is d x r, A is r x k, r << d, k)
+  이를 통해 학습 파라미터 수를 기존 대비 1% 미만으로 줄이면서도 도메인 특화 용어를 정밀하게 캡처한다.
   
   ```python
   # [src/models/whisper_lora.py:L54-L65] 베이스 모델에 LoRA 어댑터를 주입하는 실체 구현체
@@ -143,7 +143,7 @@ caption_gap_ms = cap["start_ms"] - cur_end_ms
 is_silence_gap = caption_gap_ms > 1500
 
 # 고도화된 한국어 종결 및 인용부호 닫힘 문맥 경계(Sentence Boundary) 감지 정규식
-is_sentence_end = bool(re.search(r"(다|요|죠|니|까)[\.\?\!\s]*[\'\"\]\)]*$", cur_text.strip())) or cur_text.strip().endswith((".", "?", "!"))
+is_sentence_end = bool(re.search(r"(다|요|죠|니|까)[\.\?\!\s]*[\'\"\]\)]*", cur_text.strip())) or cur_text.strip().endswith((".", "?", "!"))
 
 # 복합 하이브리드 청킹 판단 트리거
 # (A) Whisper 최대 인코더 윈도우 한계인 30초에 도달했을 때 (max_dur)
@@ -172,7 +172,7 @@ repetition_samples = []
 for idx, row in clean_df.iterrows():
     text = str(row.get('transcription_clean', "")).strip()
     raw_text = str(row.get('transcription', "")).strip()
-    words = [w for w in text.split() if w and re.match(r'^[a-zA-Z0-9가-힣]+$', w)]
+    words = [w for w in text.split() if w and re.match(r'^[a-zA-Z0-9가-힣]+', w)]
     if len(words) >= 2:
         has_repeat = False
         repeated_pattern = None
@@ -326,7 +326,7 @@ graph TD
    - 데이터셋 적재 단계에서의 물리적인 로우 레벨 중복 적재도(Row-Level Duplicity)를 완벽 검출하여 학습 데이터셋 내의 중복 편향(Overfitting bias)을 억제하며, 중복이 검출될 경우 MLOps 감사 보고서에 상위 5개 중복 증거를 즉각 박제한다.
 2. **구어체 연속 반복 상세 지표화 (Adjacent Repetition Index, INFO-only)**:
    - 발화자의 고유 특성, 말더듬 현상, 단어의 연속 중복 등장 빈도를 측정하기 위해 고안된 유니크 분석 엔진이다.
-   - 단일 세그먼트 내부에서 인접하게 중복 등장하는 단어 또는 단어구(Adjacent repeated n-grams for $n \in \{1, 2, 3\}$)를 정밀 추적하여 검출 빈도를 지표화한다. 이는 학습 가중치가 특정 어휘에 매몰되는 위험을 사전에 모니터링한다.
+   - 단일 세그먼트 내부에서 인접하게 중복 등장하는 단어 또는 단어구(Adjacent repeated n-grams for n in {1, 2, 3})를 정밀 추적하여 검출 빈도를 지표화한다. 이는 학습 가중치가 특정 어휘에 매몰되는 위험을 사전에 모니터링한다.
 3. **무작위 5-세그먼트 정합성 프로파일링 (Random Verification)**:
    - 전수 조사가 마무리된 직후, 무작위로 5개의 물리 청크를 강제 샘플링하여 파일명, 재생시간(sec), 문자 밀도(Characters Per Second, CPS), 데시벨 음향 에너지(dBFS), 원문 텍스트 Snippet을 그대로 박제한다. 이를 통해 엔지니어 및 리뷰어가 전처리 통계의 실효성을 즉각 육안으로 확인할 수 있다.
 
@@ -424,7 +424,7 @@ python setup.py
 학습이 끝난 모델의 실제 언어적 음성 인식 정확도를 Levenshtein Distance 수식 기반으로 검증하는 품질 진단 단계이다.
 * **주요 핵심 메커니즘:**
   - **WER / CER 과학적 계측**: 평가 셋을 Whisper 생성 파이프라인에 투입하여 추론 텍스트를 생성하고, 레이블 정답과 비교하여 편집 거리 오차율(WER, CER)을 수학적으로 산출한다.
-    $$ \text{CER} = \frac{\text{Substitution} + \text{Deletion} + \text{Insertion}}{\text{Reference Length}} $$
+    CER = (Substitution + Deletion + Insertion) / Reference Length
   - **Hold-out Target Set Evaluation**: 학습 데이터셋과 완전 차단된 10%의 홀드아웃 타깃 셋으로 객관적인 오버피팅 여부를 확인한다.
 * **실행 커맨드 예시:**
   ```powershell
@@ -462,7 +462,7 @@ python setup.py
 
 ### 6.1. 실험 설계 원칙 (Design of Experiments)
 
-학습 파라미터(Learning Rate, Batch Size, Optimizer)의 정적 제어를 원칙으로 삼으며, 오직 독립 변수로서 **"오디오 청킹 레벨(Lv.1 ~ Lv.3)"**과 **"모델 뼈대(Tiny, Small, Large-v3)"**만을 변형하여 목적 함수인 $\min(\text{WER}, \text{CER})$를 추구한다.
+학습 파라미터(Learning Rate, Batch Size, Optimizer)의 정적 제어를 원칙으로 삼으며, 오직 독립 변수로서 **"오디오 청킹 레벨(Lv.1 ~ Lv.3)"**과 **"모델 뼈대(Tiny, Small, Large-v3)"**만을 변형하여 목적 함수인 min({WER}, {CER})를 추구한다.
 - **평가 셋**: 슈카월드 특정 에피소드에서 무작위 추출된 10%의 홀드아웃(Hold-out) 데이터셋 활용.
 
 ### 6.2. 실험 단계별 가설 및 목표 (Phased Hypotheses)
