@@ -1,39 +1,45 @@
 @echo off
-chcp 65001 >nul
-echo ==========================================================================
-echo   AMEVA-STT-Trainer  ^|  Premium CLI Launcher
-echo ==========================================================================
-echo.
+rem ============================================================
+rem run_cli.bat - AMEVA-STT-Trainer Premium CLI Launcher
+rem
+rem 실행 흐름:
+rem   1. 가상환경(venv) 존재 여부 확인
+rem   2. 하드웨어 프리플라이트 진단 (GPU/CUDA/PyTorch 상태 점검)
+rem   3. 백엔드 API 서버(포트 8600) 연결 확인 - 없으면 자동 기동
+rem   4. CLI 메인 진입점 실행
+rem ============================================================
 
-REM 가상환경 존재 여부 확인
+rem 가상환경 확인
 IF NOT EXIST "venv\Scripts\python.exe" (
-    echo [ERROR] 가상환경을 찾을 수 없습니다.
-    echo [INFO]  setup\setup_env.ps1 을 먼저 실행하여 환경을 구축하세요.
+    echo [ERROR] Virtual environment not found.
+    echo [INFO]  Please run: python setup.py
     pause
     exit /b 1
 )
 
-REM ── [Step 1] 하드웨어 프리플라이트 진단 ──────────────────────────────────
-echo [PREFLIGHT] 하드웨어 환경 진단 중...
+rem --- Step 1: Hardware Preflight Check ---
+echo [PREFLIGHT] Running hardware diagnostic...
 venv\Scripts\python.exe scripts\check_hardware.py
 IF %errorlevel% NEQ 0 (
-    echo [WARN] 하드웨어 진단이 비정상 종료되었습니다. 계속 진행합니다...
+    echo [WARN] Hardware diagnostic exited with errors. Continuing anyway.
 )
 echo.
 
-REM ── [Step 2] 백엔드 API 서버 연결 확인 ────────────────────────────────────
-echo [INFO] Checking if backend API server is running on port 8600...
+rem --- Step 2: Backend API Server Check ---
+rem 포트 8600 바인딩 여부 확인 후 없으면 run_server.bat 을 백그라운드로 기동
+echo [INFO] Checking backend API server on port 8600...
 netstat -ano | find "8600" >nul
 if %errorlevel% neq 0 (
-    echo [WARN] API 서버가 실행 중이 아닙니다. 자동으로 서버를 시작합니다...
+    echo [WARN] API server not running. Starting server in background...
     start "AMEVA API Server" run_server.bat
-    echo [INFO] 서버 초기화 대기 중 (5초)...
+    echo [INFO] Waiting 5 seconds for server to initialize...
     timeout /t 5 /nobreak >nul
 ) else (
-    echo [INFO] API 서버가 이미 실행 중입니다!
+    echo [INFO] API server is already running.
 )
+echo.
 
-REM ── [Step 3] Premium CLI 실행 ─────────────────────────────────────────────
+rem --- Step 3: Launch CLI ---
 echo [INFO] Starting AMEVA-STT-Trainer Premium CLI...
 echo.
 venv\Scripts\python.exe cli\cli.py
