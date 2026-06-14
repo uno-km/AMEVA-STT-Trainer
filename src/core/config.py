@@ -86,7 +86,7 @@ DEFAULTS = {
     "learning_rate"          : 1e-4,         # [수정] LoRA 어댑터 학습률 (1e-3은 치명적 망각 유발, 1e-4가 황금비율)
     "max_steps"              : 400,          # [수정] 전체 학습 스텝 수 (Tiny 모델 기준 과적합 방지)
     "save_steps"             : 100,          # 체크포인트 저장 주기
-    "logging_steps"          : 10,           # 로그 출력 주기
+    "logging_steps"          : 1,            # 로그 출력 주기 (실시간 피드백을 위해 1로 변경)
     "warmup_steps"           : 50,           # 학습률 워밍업 스텝 수
     "lora_r"                 : 32,           # LoRA 저차원 랭크(r)
     "lora_alpha"             : 64,           # LoRA 스케일링 인자(α)

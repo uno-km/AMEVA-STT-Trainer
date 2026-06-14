@@ -29,6 +29,7 @@ tqdm
 huggingface-hub
 rich
 psutil
+gputil
 win10toast
 wandb
 
