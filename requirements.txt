@@ -43,3 +43,4 @@ uvicorn
 requests
 plotext
 python-docx
+matplotlib

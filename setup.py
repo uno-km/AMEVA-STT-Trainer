@@ -7,7 +7,7 @@ AMEVA-STT-Trainer 통합 설치 스크립트 (Windows 전용)
 
 실행 방법:
     python setup.py
-
+"""
 
 import os
 import sys
@@ -162,7 +162,7 @@ def upgrade_pip():
 # ============================================================
 
 def detect_cuda_version() -> str:
-    """
+    r"""
     Windows 레지스트리 또는 CUDA_PATH 환경변수에서 CUDA Toolkit 버전을 탐지한다.
     감지 성공 시 '12.1' 형식의 버전 문자열을 반환하고, 실패 시 빈 문자열을 반환한다.
 

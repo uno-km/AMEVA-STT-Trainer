@@ -26,7 +26,7 @@ def _build_plotext_chart(loss_hist, acc_hist, width=100, height=15):
     plt.clf()
     plt.plotsize(width, height)
     plt.theme("clear")
-    plt.colorless() # Rich의 Panel 안에서 렌더링 시 충돌을 막기 위해 무색/혹은 특정색 지정
+    # plotext 최신 버전에서 colorless()가 누락되었으므로 주석 처리하거나 배제합니다.
     
     if loss_hist:
         plt.plot(loss_hist, marker="dot", color="red", label="Loss")
