@@ -8,15 +8,6 @@ AMEVA-STT-Trainer 통합 설치 스크립트 (Windows 전용)
 실행 방법:
     python setup.py
 
-수행 작업 순서:
-    1. 가상환경(venv) 생성
-    2. pip 최신 버전으로 업그레이드
-    3. GPU/CUDA 환경 감지 후 적합한 PyTorch 설치
-    4. 나머지 requirements.txt 패키지 설치
-    5. 핵심 라이브러리 설치 검증
-    6. Whisper 모델 파일 대화형 다운로드
-    7. whisper.cpp 리포지토리 복제 (GGUF 양자화용)
-"""
 
 import os
 import sys
@@ -342,36 +333,33 @@ def download_whisper_model(model_id: str):
     이미 다운로드된 경우 Hugging Face transformers 가 자동으로 캐시에서 로드하므로
     재다운로드 없이 빠르게 완료된다.
 
+    모델 가중치 / 토크나이저 / 프로세서를 한 번에 다운로드하는 단일 subprocess 로 처리.
+    캡처 없이 직접 출력하여 진행률 바가 터미널에 보이도록 한다.
+
     Args:
         model_id: Hugging Face 모델 식별자 (예: 'openai/whisper-tiny')
     """
     python = get_venv_python()
 
-    # 모델 가중치 다운로드
-    info(f"Downloading model weights: {model_id}")
-    code_model = (
-        f"import os; os.environ['HF_HOME'] = r'{HF_HOME_PATH}'; "
-        f"from transformers import WhisperForConditionalGeneration; "
-        f"WhisperForConditionalGeneration.from_pretrained('{model_id}', local_files_only=False)"
+    # 모델 가중치 + 프로세서 + 토크나이저를 한 번에 다운로드
+    # capture_output=False 로 설정하여 HF 다운로드 진행률 바가 터미널에 그대로 출력된다
+    code = (
+        f"import os; "
+        f"os.environ['HF_HOME'] = r'{HF_HOME_PATH}'; "
+        f"from transformers import WhisperForConditionalGeneration, WhisperProcessor; "
+        f"print('  Downloading model weights...'); "
+        f"WhisperForConditionalGeneration.from_pretrained('{model_id}', local_files_only=False); "
+        f"print('  Downloading tokenizer/processor...'); "
+        f"WhisperProcessor.from_pretrained('{model_id}', language='Korean', task='transcribe', local_files_only=False); "
+        f"print('  Done.')"
     )
-    result = subprocess.run([python, "-c", code_model], capture_output=True, text=True)
-    if result.returncode != 0:
-        warn(f"Model weight download failed: {result.stderr.strip()[:200]}")
-        return
+    result = subprocess.run([python, "-c", code])
+    if result.returncode == 0:
+        ok(f"{model_id} - Download complete.")
+    else:
+        warn(f"{model_id} download failed (exit code {result.returncode}).")
+        warn("Check your internet connection and try again.")
 
-    # 프로세서 / 토크나이저 다운로드
-    info(f"Downloading tokenizer and processor: {model_id}")
-    code_proc = (
-        f"import os; os.environ['HF_HOME'] = r'{HF_HOME_PATH}'; "
-        f"from transformers import WhisperProcessor; "
-        f"WhisperProcessor.from_pretrained('{model_id}', local_files_only=False)"
-    )
-    result = subprocess.run([python, "-c", code_proc], capture_output=True, text=True)
-    if result.returncode != 0:
-        warn(f"Processor download failed: {result.stderr.strip()[:200]}")
-        return
-
-    ok(f"{model_id} - Download complete.")
 
 
 def download_models():
@@ -471,7 +459,7 @@ def print_done():
     print("       run_cli.bat")
     print()
     print("  4. View training from another device (browser):")
-    print("       run_web_cli.bat")
+    print("       run_web_cli.bat  (requires ttyd.exe)")
     print()
     print("=" * 60)
     print()
