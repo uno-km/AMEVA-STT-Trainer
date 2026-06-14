@@ -90,4 +90,7 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         console.print("\n[red]강제 종료됨.[/red]")
         sys.exit(0)
+    except EOFError:
+        console.print("\n[yellow]입력이 종료되어 프로그램이 닫힙니다.[/yellow]")
+        sys.exit(0)
 

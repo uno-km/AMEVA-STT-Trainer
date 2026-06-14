@@ -227,7 +227,8 @@ def start_new_task():
     console.print(Panel("[bold green]🚀 신규 학습 파이프라인 (원격 기동)[/bold green]", expand=False))
 
     task_name = Prompt.ask("[cyan]1.[/cyan] 태스크 명", default="Remote_Task")
-    step_limit = IntPrompt.ask("[cyan]2.[/cyan] 파이프라인 진행 범위 (1: 수집만, 2: 학습까지, 3: 양자화/내보내기까지)", choices=[1, 2, 3], default=3)
+    step_limit_str = Prompt.ask("[cyan]2.[/cyan] 파이프라인 진행 범위 (1: 수집만, 2: 학습까지, 3: 양자화/내보내기까지)", choices=["1", "2", "3"], default="3")
+    step_limit = int(step_limit_str)
     source_type = Prompt.ask("[cyan]3.[/cyan] 데이터 소스", choices=["youtube","local"], default="youtube")
     
     s1 = {"source_type": source_type}
