@@ -23,3 +23,9 @@ dataset/
 # --- OS 파일 ---
 .DS_Store
 Thumbs.db
+
+# Databases
+db/*.db
+db/*.db-journal
+# Scratch folder
+scratch/
